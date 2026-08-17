@@ -1,0 +1,16 @@
+{
+  "name": "Электро-приёмка — поквартирный обход",
+  "short_name": "Приёмка",
+  "description": "Чек-лист поквартирного обхода при сдаче электрики. Работает без интернета, выгружает шахматку в Excel.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F1F5F9",
+  "theme_color": "#16A34A",
+  "lang": "ru",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
