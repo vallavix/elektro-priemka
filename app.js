@@ -125,10 +125,39 @@ var PH = {}; // кэш фото в памяти: id -> dataURL
 /* ============ вспомогательное ============ */
 function bld(id) { return CFG.buildings.filter(function (b) { return b.id === (id || UI.b); })[0] || CFG.buildings[0]; }
 function floors(b) { var a = []; for (var f = b.from; f <= b.to; f++) a.push(f); return a; }
+/* сколько квартир на этаже: обычно b.per, но у отдельных этажей бывает своё */
+function perOf(b, f) {
+  return (b.ex && b.ex[f] != null) ? b.ex[f] : b.per;
+}
 function flatsOf(b, f) {
-  var a = [], start = b.first + (f - b.from) * b.per;
-  for (var i = 0; i < b.per; i++) a.push(start + i);
+  var a = [], start = b.first;
+  for (var x = b.from; x < f; x++) start += perOf(b, x);
+  for (var i = 0; i < perOf(b, f); i++) a.push(start + i);
   return a;
+}
+/* «18-20:10, 5:8» <-> {18:10, 19:10, 20:10, 5:8} */
+function exToText(ex) {
+  if (!ex) return '';
+  var ks = Object.keys(ex).map(Number).sort(function (a, z) { return a - z; });
+  var out = [], i = 0;
+  while (i < ks.length) {
+    var j = i;
+    while (j + 1 < ks.length && ks[j + 1] === ks[j] + 1 && ex[ks[j + 1]] === ex[ks[i]]) j++;
+    out.push((i === j ? ks[i] : ks[i] + '-' + ks[j]) + ':' + ex[ks[i]]);
+    i = j + 1;
+  }
+  return out.join(', ');
+}
+function textToEx(s) {
+  var ex = {};
+  String(s || '').split(/[,;]/).forEach(function (part) {
+    var m = part.trim().match(/^(\d+)\s*(?:-\s*(\d+))?\s*:\s*(\d+)$/);
+    if (!m) return;
+    var a = +m[1], z = m[2] ? +m[2] : a, n = +m[3];
+    if (n < 1 || z < a) return;
+    for (var f = a; f <= z; f++) ex[f] = n;
+  });
+  return Object.keys(ex).length ? ex : null;
 }
 function allFlats(b) {
   var a = [];
@@ -429,6 +458,8 @@ function viewSettings() {
       '<div class="row"><b>Этажи по</b><input type="number" data-b="' + i + '|to" value="' + b.to + '"></div>' +
       '<div class="row"><b>Квартир на этаже</b><input type="number" data-b="' + i + '|per" value="' + b.per + '"></div>' +
       '<div class="row"><b>Первая квартира</b><input type="number" data-b="' + i + '|first" value="' + b.first + '"></div>' +
+      '<div class="row"><b>Этажи-исключения</b><input type="text" style="width:130px" data-b="' + i + '|ex" ' +
+      'placeholder="18-20:10" value="' + h(exToText(b.ex)) + '"></div>' +
       (CFG.buildings.length > 1 ? '<div class="row"><b style="color:var(--bad)">Удалить корпус</b><button class="iconbtn" data-delb="' + i + '" style="color:var(--bad)">' + I.trash + '</button></div>' : '') +
       '</div>';
   }).join('');
@@ -446,6 +477,9 @@ function viewSettings() {
     '<div class="card"><div class="row"><b>Название</b><input type="text" style="width:170px" id="objname" value="' + h(CFG.object) + '"></div></div>' +
     '<div class="sec" style="margin-top:22px">Корпуса</div>' + bs +
     '<button class="btn btn-ghost" data-act="addb">' + I.plus + ' Добавить корпус</button>' +
+    '<div class="hint">«Этажи-исключения» — если на части этажей квартир меньше или больше обычного. ' +
+    'Пиши <b>18-20:10</b> (с 18 по 20 этаж по 10 квартир). Несколько диапазонов — через запятую. ' +
+    'Нумерация дальше пересчитается сама.</div>' +
     '<div class="sec" style="margin-top:24px">Позиции проверки</div>' +
     '<div class="card">' + ps + '</div>' +
     '<div class="hint">Порядок и названия — ровно как в шахматке начальника. «Группа» — это объединяющая шапка в Excel (например «Санузел, коридор»); оставь пустой, если колонка отдельная.</div>' +
@@ -535,7 +569,9 @@ function bind() {
   app.querySelectorAll('[data-b]').forEach(function (el) {
     el.onchange = function () {
       var p = el.dataset.b.split('|'), b = CFG.buildings[+p[0]];
-      b[p[1]] = p[1] === 'name' ? el.value : Math.max(p[1] === 'first' ? 1 : 1, +el.value || 1);
+      if (p[1] === 'name') b.name = el.value;
+      else if (p[1] === 'ex') { var ex = textToEx(el.value); if (ex) b.ex = ex; else delete b.ex; }
+      else b[p[1]] = Math.max(1, +el.value || 1);
       if (b.to < b.from) b.to = b.from;
       save(); if (p[1] !== 'name') render();
     };
@@ -779,7 +815,7 @@ function exportXlsx() {
   var ir = [[{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: '№ на эт.', s: 1 },
   { v: 'Тип', s: 1 }, { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 }, { v: 'Примечание', s: 1 },
   { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]];
-  var images = [], rowHeights = {};
+  var images = [], rowHeights = {}, big = [];
   CFG.buildings.forEach(function (b) {
     var d = DATA[b.id] || {};
     allFlats(b).forEach(function (x, gi) {
@@ -798,7 +834,20 @@ function exportXlsx() {
         var u8 = dataUrlToBytes(PH[id]);
         if (!u8) return;
         images.push({ col: PHCOL + k, row: rowIdx, data: u8, name: photoName(b, x, k) });
-        rowHeights[rowIdx] = 100;
+        rowHeights[rowIdx] = 120;
+      });
+    });
+  });
+  /* на лист «Фото» идут все снимки — в том числе с квартир без замечаний */
+  CFG.buildings.forEach(function (b) {
+    var d = DATA[b.id] || {};
+    allFlats(b).forEach(function (x) {
+      var r = d[x.n];
+      if (!r || !(r.ph || []).length) return;
+      var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; }).map(function (p) { return p.n; }).join(', ');
+      r.ph.forEach(function (id, k) {
+        var u8 = dataUrlToBytes(PH[id]);
+        if (u8) big.push({ b: b, x: x, r: r, k: k, data: u8, miss: miss });
       });
     });
   });
@@ -808,6 +857,30 @@ function exportXlsx() {
     { w: 20 }, { w: 20 }, { w: 20 }],
     rows: ir, merges: [], rowHeights: rowHeights, images: images
   });
+
+  /* отдельный лист «Фото» — крупно, чтобы прорабу было видно без возни */
+  if (big.length) {
+    var pr = [[{ v: 'Квартира', s: 1 }, { v: 'Замечание', s: 1 }, { v: 'Фото', s: 1 }]];
+    var pimg = [], ph2 = {};
+    big.forEach(function (it) {
+      var idx = flatsOf(it.b, it.x.f).indexOf(it.x.n) + 1;
+      var rowIdx = pr.length;
+      pr.push([
+        { v: it.b.name + '\nЭтаж ' + it.x.f + '\nКв. ' + it.x.n + ' (№' + idx + ')' +
+          (it.r.crit ? '\n⚠ Критично' : ''), s: 3 },
+        { v: (it.r.left || it.miss || '') + (it.r.note ? '\n' + it.r.note : ''), s: 3 },
+        { v: '', s: 2 }
+      ]);
+      pimg.push({ col: 2, row: rowIdx, data: it.data, maxH: 300, maxW: 400,
+        name: photoName(it.b, it.x, it.k) });
+      ph2[rowIdx] = 310;
+    });
+    sheets.push({
+      name: 'Фото',
+      cols: [{ w: 22 }, { w: 40 }, { w: 58 }],
+      rows: pr, merges: [], rowHeights: ph2, images: pimg
+    });
+  }
 
   try {
     download(window.XLS.workbook(sheets), 'Шахматка_' + CFG.object.replace(/\s+/g, '_') + '_' + dateStamp() + '.xlsx');

@@ -200,11 +200,24 @@
     return x;
   }
 
+  /* Одна и та же картинка на разных листах должна лежать в файле один раз. */
+  function mediaKey(u8) {
+    var a = 5381, b = 52711, n = u8.length, step = Math.max(1, n >> 10);
+    for (var i = 0; i < n; i += step) { a = (a * 33 + u8[i]) >>> 0; b = (b * 31 + u8[i]) >>> 0; }
+    return n + '_' + a.toString(36) + b.toString(36);
+  }
+
   function workbook(sheets) {
-    var files = [], drawings = [];
-    /* нумеруем рисунки: лист -> номер drawing */
+    var files = [], drawings = [], media = [], byKey = {};
+    /* нумеруем рисунки: лист -> номер drawing; картинки складываем в общий пул */
     sheets.forEach(function (s) {
-      if (s.images && s.images.length) { drawings.push(s); s._dw = drawings.length; }
+      if (!(s.images && s.images.length)) return;
+      drawings.push(s); s._dw = drawings.length;
+      s.images.forEach(function (im) {
+        var k = mediaKey(im.data);
+        if (byKey[k] == null) { media.push(im.data); byKey[k] = media.length; }
+        im._mi = byKey[k];
+      });
     });
 
     files.push({
@@ -269,12 +282,12 @@
         data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
           '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
           s.images.map(function (im, k) {
-            return '<Relationship Id="rId' + (k + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/img' + s._dw + '_' + (k + 1) + '.jpeg"/>';
+            return '<Relationship Id="rId' + (k + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/img' + im._mi + '.jpeg"/>';
           }).join('') + '</Relationships>'
       });
-      s.images.forEach(function (im, k) {
-        files.push({ name: 'xl/media/img' + s._dw + '_' + (k + 1) + '.jpeg', data: im.data });
-      });
+    });
+    media.forEach(function (data, i) {
+      files.push({ name: 'xl/media/img' + (i + 1) + '.jpeg', data: data });
     });
     return zip(files, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
