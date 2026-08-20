@@ -145,6 +145,19 @@ svg{display:block;flex:0 0 auto}
 .seg .n.on{background:var(--bad);color:#fff}
 .seg .x.on{background:var(--na);color:#fff}
 
+/* быстрые заметки */
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:9px}
+.chip{
+  display:inline-flex;align-items:center;gap:5px;min-height:38px;padding:6px 12px 6px 9px;
+  border-radius:99px;background:var(--surface);border:1px solid var(--border);
+  font-size:14px;font-weight:550;line-height:1.15;text-align:left;
+  transition:transform .12s,background .15s,border-color .15s
+}
+.chip:active{transform:scale(.95)}
+.chip svg{width:15px;height:15px;stroke-width:2.5;color:var(--muted-fg)}
+.chip.on{background:var(--ok-bg);border-color:var(--ok);color:var(--ok)}
+.chip.on svg{color:var(--ok)}
+
 label.fld{display:block;margin:18px 0 6px;font-size:13px;font-weight:600;color:var(--muted-fg)}
 textarea,input[type=text]{
   width:100%;padding:12px;border-radius:var(--r-sm);border:1px solid var(--border);
@@ -238,9 +251,24 @@ textarea:focus,input:focus{outline:2px solid var(--ok);outline-offset:-1px;borde
 .row b{flex:1;font-weight:500;font-size:15px}
 .row input[type=text],.row input[type=number]{width:96px;text-align:right;padding:8px;font-size:15px}
 .hint{font-size:12px;color:var(--muted-fg);margin:8px 2px 18px;line-height:1.45}
-.drag{padding:12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
-.drag input{flex:1;border:none;background:none;padding:6px 0;font-size:15px}
+.drag{padding:8px 10px 8px 12px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border)}
+.drag:last-child{border-bottom:none}
+.drag input{flex:1;min-width:0;border:none;background:none;padding:6px 0;font-size:15px}
 .drag input:focus{outline:none;border-bottom:1.5px solid var(--ok)}
+.iconbtn.mini{width:38px;height:38px;border-radius:10px}
+.iconbtn.mini svg{width:19px;height:19px}
+.iconbtn.mini[disabled]{opacity:.25;pointer-events:none}
+
+/* разделы позиций в настройках */
+.grpbox{margin-bottom:18px}
+.grphead{display:flex;align-items:center;gap:6px;margin:0 2px 6px}
+.grphead input{
+  flex:1;min-width:0;border:none;background:none;padding:4px 0;
+  font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted-fg)
+}
+.grphead input:focus{outline:none;border-bottom:1.5px solid var(--ok)}
+.mini-btn{min-height:42px;font-size:14px;font-weight:600;margin-top:8px}
 
 /* ---------- предпросмотр шахматки ---------- */
 .tblwrap{overflow:auto;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);-webkit-overflow-scrolling:touch}

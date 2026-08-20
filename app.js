@@ -34,10 +34,26 @@ var I = (function () {
     bolt: s('<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>'),
     dot: s('<circle cx="12" cy="12" r="8"/>'),
     merge: s('<path d="M7 21V9a4 4 0 0 0 4 4h3"/><circle cx="7" cy="5" r="2.5"/><circle cx="17" cy="13" r="2.5"/>'),
-    user: s('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>')
+    user: s('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'),
+    up: s('<path d="m18 15-6-6-6 6"/>'),
+    down: s('<path d="m6 9 6 6 6-6"/>')
   };
 })();
-var POS_ICONS = ['panel', 'swtch', 'socket', 'box', 'lamp', 'ceil', 'socket', 'shield', 'bolt'];
+/* иконку подбираем по названию, а не по порядку — иначе она едет при добавлении позиции */
+var POS_ICONS = [
+  [/щит|автомат/i, 'panel'],
+  [/выключ/i, 'swtch'],
+  [/розет/i, 'socket'],
+  [/коробк/i, 'box'],
+  [/бра/i, 'lamp'],
+  [/люстр|светильник|свет/i, 'ceil'],
+  [/куп|заземл/i, 'shield'],
+  [/эффект|прозвон|провер/i, 'bolt']
+];
+function posIcon(name) {
+  for (var i = 0; i < POS_ICONS.length; i++) if (POS_ICONS[i][0].test(name)) return I[POS_ICONS[i][1]];
+  return I.dot;
+}
 
 /* ============ конфигурация по умолчанию ============ */
 var DEFAULT_CFG = {
@@ -300,7 +316,7 @@ function viewFlat() {
     return '<div class="grp">' + h(run.g || 'Квартира') + '</div><div class="items">' +
       run.items.map(function (it) {
         var v = r.st[it.p.id];
-        return '<div class="item"><span class="item-ico">' + I[POS_ICONS[it.idx % POS_ICONS.length]] + '</span>' +
+        return '<div class="item"><span class="item-ico">' + posIcon(it.p.n) + '</span>' +
           '<span class="item-name">' + h(it.p.n) + '</span><span class="seg">' +
           '<button class="y' + (v === 1 ? ' on' : '') + '" data-set="' + it.p.id + '|1" aria-label="есть">' + I.check + '</button>' +
           '<button class="n' + (v === 0 ? ' on' : '') + '" data-set="' + it.p.id + '|0" aria-label="нет">' + I.x + '</button>' +
@@ -333,6 +349,7 @@ function viewFlat() {
   }) +
     '<div class="screen" id="swipe">' + pill + allok + body + rest +
     '<label class="fld">Что осталось</label>' +
+    chipsHtml(r.left) +
     '<textarea id="left" rows="2" maxlength="200" placeholder="Например: выключатель в спальне не работает">' + h(r.left) + '</textarea>' +
     '<div class="cnt"><span id="leftc">' + (r.left || '').length + '</span>/200</div>' +
     '<div class="crit"><b>Критичное замечание</b><span class="sw' + (r.crit ? ' on' : '') + '" data-act="crit"></span></div>' +
@@ -341,6 +358,51 @@ function viewFlat() {
     '<textarea id="note" rows="2" placeholder="Необязательно">' + h(r.note) + '</textarea>' +
     '</div>' + navbar(prev, next);
 }
+/* ---------- быстрые заметки ----------
+   Собираем фразы из того, что уже написано по всем квартирам: текст режем по
+   запятым, считаем повторы и показываем самые ходовые. Тап — вставить/убрать. */
+function splitPhrases(s) {
+  return String(s || '').split(/[,;]+/).map(function (t) { return t.trim(); })
+    .filter(function (t) { return t.length > 1 && t.length < 60; });
+}
+function quickPhrases() {
+  var cnt = {};
+  CFG.buildings.forEach(function (b) {
+    var d = DATA[b.id] || {};
+    Object.keys(d).forEach(function (n) {
+      splitPhrases(d[n].left).forEach(function (t) {
+        var k = t.toLowerCase();
+        if (!cnt[k]) cnt[k] = { t: t, c: 0 };
+        cnt[k].c++;
+      });
+    });
+  });
+  var list = Object.keys(cnt).map(function (k) { return cnt[k]; })
+    .filter(function (x) { return x.c > 1; })
+    .sort(function (a, z) { return z.c - a.c; })
+    .slice(0, 10).map(function (x) { return x.t; });
+  (CFG.pinned || []).forEach(function (t) {
+    if (list.indexOf(t) < 0) list.unshift(t);
+  });
+  return list.slice(0, 12);
+}
+function chipsHtml(cur) {
+  var have = splitPhrases(cur).map(function (t) { return t.toLowerCase(); });
+  var list = quickPhrases();
+  if (!list.length) return '';
+  return '<div class="chips">' + list.map(function (t, i) {
+    var on = have.indexOf(t.toLowerCase()) >= 0;
+    return '<button class="chip' + (on ? ' on' : '') + '" data-chip="' + i + '">' +
+      (on ? I.check : I.plus) + h(t) + '</button>';
+  }).join('') + '</div>';
+}
+function togglePhrase(cur, phrase) {
+  var parts = splitPhrases(cur);
+  var i = parts.map(function (t) { return t.toLowerCase(); }).indexOf(phrase.toLowerCase());
+  if (i >= 0) parts.splice(i, 1); else parts.push(phrase);
+  return parts.join(', ');
+}
+
 function photosHtml(r) {
   return (r.ph || []).map(function (id) {
     return '<span class="photo-wrap"><img class="photo" src="' + (PH[id] || '') + '" alt="Фото замечания">' +
@@ -464,11 +526,29 @@ function viewSettings() {
       '</div>';
   }).join('');
 
-  var ps = CFG.positions.map(function (p, i) {
-    return '<div class="drag"><span class="item-ico">' + I[POS_ICONS[i % POS_ICONS.length]] + '</span>' +
-      '<input type="text" data-p="' + i + '|n" value="' + h(p.n) + '">' +
-      '<input type="text" data-p="' + i + '|g" value="' + h(p.g || '') + '" placeholder="группа" style="max-width:110px;font-size:13px;color:var(--muted-fg)">' +
-      '<button class="iconbtn" data-delp="' + i + '" style="width:36px;height:36px;color:var(--bad)">' + I.trash + '</button></div>';
+  /* позиции показываем разделами: группа = раздел чек-листа и шапка в Excel */
+  var runs = [], ps = '';
+  CFG.positions.forEach(function (p, i) {
+    var g = p.g || '';
+    var last = runs[runs.length - 1];
+    if (!last || last.g !== g) runs.push({ g: g, items: [] });
+    runs[runs.length - 1].items.push({ p: p, i: i });
+  });
+  ps = runs.map(function (run, ri) {
+    var rows = run.items.map(function (it, k) {
+      return '<div class="drag"><span class="item-ico">' + posIcon(it.p.n) + '</span>' +
+        '<input type="text" data-p="' + it.i + '|n" value="' + h(it.p.n) + '">' +
+        '<button class="iconbtn mini" data-move="' + it.i + '|-1"' + (k === 0 ? ' disabled' : '') + ' aria-label="выше">' + I.up + '</button>' +
+        '<button class="iconbtn mini" data-move="' + it.i + '|1"' + (k === run.items.length - 1 ? ' disabled' : '') + ' aria-label="ниже">' + I.down + '</button>' +
+        '<button class="iconbtn mini" data-delp="' + it.i + '" style="color:var(--bad)" aria-label="удалить">' + I.trash + '</button></div>';
+    }).join('');
+    return '<div class="grpbox">' +
+      '<div class="grphead"><input type="text" data-grp="' + ri + '" value="' + h(run.g) + '" placeholder="Квартира">' +
+      (runs.length > 1 ? '<button class="iconbtn mini" data-delg="' + ri + '" style="color:var(--bad)" aria-label="удалить раздел">' + I.trash + '</button>' : '') +
+      '</div>' +
+      '<div class="card">' + rows + '</div>' +
+      '<button class="btn btn-ghost mini-btn" data-addp="' + ri + '">' + I.plus + ' Позиция в этот раздел</button>' +
+      '</div>';
   }).join('');
 
   return topbar({ left: '<span style="width:44px"></span>', title: 'Настройки', right: '<span style="width:44px"></span>' }) +
@@ -480,10 +560,11 @@ function viewSettings() {
     '<div class="hint">«Этажи-исключения» — если на части этажей квартир меньше или больше обычного. ' +
     'Пиши <b>18-20:10</b> (с 18 по 20 этаж по 10 квартир). Несколько диапазонов — через запятую. ' +
     'Нумерация дальше пересчитается сама.</div>' +
-    '<div class="sec" style="margin-top:24px">Позиции проверки</div>' +
-    '<div class="card">' + ps + '</div>' +
-    '<div class="hint">Порядок и названия — ровно как в шахматке начальника. «Группа» — это объединяющая шапка в Excel (например «Санузел, коридор»); оставь пустой, если колонка отдельная.</div>' +
-    '<button class="btn btn-ghost" data-act="addp">' + I.plus + ' Добавить позицию</button>' +
+    '<div class="sec" style="margin-top:24px">Позиции проверки</div>' + ps +
+    '<button class="btn btn-ghost" data-act="addg">' + I.plus + ' Добавить раздел</button>' +
+    '<div class="hint">Раздел — это заголовок в чек-листе и объединённая шапка в Excel. ' +
+    'Порядок разделов и позиций внутри — такой же, как будет в шахматке. ' +
+    'У первого раздела название можно не писать, тогда колонки идут в Excel по отдельности.</div>' +
     '<div class="sec" style="margin-top:24px">Данные</div>' +
     '<button class="btn btn-ghost" data-act="restore" style="margin-bottom:10px">Загрузить резервную копию</button>' +
     '<button class="btn btn-ghost" data-act="wipe" style="color:var(--bad)">Стереть все отметки</button>' +
@@ -536,6 +617,14 @@ function bind() {
   app.querySelectorAll('[data-pv]').forEach(function (el) {
     el.onclick = function () { VIEW.pv = el.dataset.pv; render(); };
   });
+  app.querySelectorAll('[data-chip]').forEach(function (el) {
+    el.onclick = function () {
+      var phrase = quickPhrases()[+el.dataset.chip];
+      var r = rec(UI.b, VIEW.flat, true);
+      r.left = togglePhrase(r.left, phrase);
+      r.ts = Date.now(); vibr(8); save(); render();
+    };
+  });
   app.querySelectorAll('[data-pick]').forEach(function (el) {
     el.onclick = function () {
       var p = el.dataset.pick.split('|');
@@ -584,6 +673,52 @@ function bind() {
       save();
     };
   });
+  /* разделы позиций */
+  function groupRuns() {
+    var runs = [];
+    CFG.positions.forEach(function (p, i) {
+      var g = p.g || '', last = runs[runs.length - 1];
+      if (!last || last.g !== g) runs.push({ g: g, from: i, to: i });
+      else last.to = i;
+    });
+    return runs;
+  }
+  app.querySelectorAll('[data-grp]').forEach(function (el) {
+    el.onchange = function () {
+      var run = groupRuns()[+el.dataset.grp], v = el.value.trim();
+      for (var i = run.from; i <= run.to; i++) {
+        if (v) CFG.positions[i].g = v; else delete CFG.positions[i].g;
+      }
+      save(); render();
+    };
+  });
+  app.querySelectorAll('[data-move]').forEach(function (el) {
+    el.onclick = function () {
+      var p = el.dataset.move.split('|'), i = +p[0], j = i + (+p[1]);
+      if (j < 0 || j >= CFG.positions.length) return;
+      var t = CFG.positions[i]; CFG.positions[i] = CFG.positions[j]; CFG.positions[j] = t;
+      vibr(6); save(); render();
+    };
+  });
+  app.querySelectorAll('[data-addp]').forEach(function (el) {
+    el.onclick = function () {
+      var run = groupRuns()[+el.dataset.addp];
+      var np = { id: 'p' + Date.now(), n: 'Новая позиция' };
+      if (run.g) np.g = run.g;
+      CFG.positions.splice(run.to + 1, 0, np);
+      save(); render();
+    };
+  });
+  app.querySelectorAll('[data-delg]').forEach(function (el) {
+    var run = groupRuns()[+el.dataset.delg];
+    el.onclick = function () {
+      var n = run.to - run.from + 1;
+      if (CFG.positions.length - n < 1) { toast('Должна остаться хотя бы одна позиция'); return; }
+      if (!confirm('Удалить раздел «' + (run.g || 'без названия') + '» и ' + n + ' позиц. вместе с отметками?')) return;
+      CFG.positions.splice(run.from, n);
+      save(); render();
+    };
+  });
   app.querySelectorAll('[data-delp]').forEach(function (el) {
     el.onclick = function () {
       if (CFG.positions.length <= 1) return;
@@ -613,19 +748,8 @@ function bind() {
 
   app.querySelectorAll('[data-act]').forEach(function (el) { el.onclick = function () { act(el.dataset.act, el); }; });
 
-  /* свайп между квартирами */
-  var sw = document.getElementById('swipe');
-  if (sw) {
-    var x0 = 0, y0 = 0;
-    sw.addEventListener('touchstart', function (e) { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
-    sw.addEventListener('touchend', function (e) {
-      var dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
-      if (Math.abs(dx) < 80 || Math.abs(dy) > 60) return;
-      var list = seq(), i = list.findIndex(function (t) { return t.n === VIEW.flat; });
-      var t = dx < 0 ? list[i + 1] : list[i - 1];
-      if (t) { vibr(6); go('flat', { flat: t.n }); }
-    }, { passive: true });
-  }
+  /* свайпа между квартирами нет: он срабатывал при выделении текста в заметке.
+     Переключение — только кнопками внизу. */
 
   /* активный этаж — в центр полосы */
   var fr = document.getElementById('floors');
@@ -664,8 +788,9 @@ function act(a, el) {
     case 'addb':
       CFG.buildings.push({ id: 'b' + Date.now(), name: 'Корпус ' + (CFG.buildings.length + 1), from: 1, to: 12, per: 8, first: 1 });
       save(); render(); break;
-    case 'addp':
-      CFG.positions.push({ id: 'p' + Date.now(), n: 'Новая позиция' }); save(); render(); break;
+    case 'addg':
+      CFG.positions.push({ id: 'p' + Date.now(), n: 'Новая позиция', g: 'Новый раздел' });
+      save(); render(); break;
     case 'wipe':
       if (!confirm('Стереть ВСЕ отметки по всем квартирам? Отменить нельзя.')) return;
       DATA = {}; save(); toast('Отметки стёрты'); render(); break;
