@@ -748,6 +748,8 @@ function dateStamp() {
 var THUMB_BOX = 165;   // px — сторона миниатюры в «Замечаниях»
 var BIG_W = 540;       // px — ширина снимка на листе «Фото»
 var BIG_H = 700;       // px — потолок по высоте для вертикальных кадров
+var FULL_MAX = 800;    // px — в файл кладём снимок такого размера, а не оригинал:
+                       // показывается он всё равно мельче, а вес падает вдвое
 
 function loadImg(url) {
   return new Promise(function (res, rej) {
@@ -761,6 +763,14 @@ function fit(w, h, maxW, maxH) {
   var s = Math.min(maxW / w, maxH / h, 1);
   return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)) };
 }
+function reencode(img, size, q) {
+  var cv = document.createElement('canvas');
+  cv.width = size.w; cv.height = size.h;
+  var g = cv.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(img, 0, 0, size.w, size.h);
+  return dataUrlToBytes(cv.toDataURL('image/jpeg', q));
+}
 function preparePhotos(ids) {
   var out = {}, i = 0;
   function step() {
@@ -769,14 +779,12 @@ function preparePhotos(ids) {
     if (!url) return step();
     return loadImg(url).then(function (img) {
       var big = fit(img.width, img.height, BIG_W, BIG_H);
-      /* миниатюра: рисуем с двойным запасом, чтобы на печати не мылила */
       var t = fit(img.width, img.height, THUMB_BOX, THUMB_BOX);
-      var cv = document.createElement('canvas');
-      cv.width = t.w * 2; cv.height = t.h * 2;
-      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
       out[id] = {
-        full: dataUrlToBytes(url), fw: big.w, fh: big.h,
-        thumb: dataUrlToBytes(cv.toDataURL('image/jpeg', 0.62)), tw: t.w, th: t.h
+        full: reencode(img, fit(img.width, img.height, FULL_MAX, FULL_MAX), 0.75),
+        fw: big.w, fh: big.h,
+        /* миниатюра рисуется с двойным запасом, чтобы на печати не мылила */
+        thumb: reencode(img, { w: t.w * 2, h: t.h * 2 }, 0.62), tw: t.w, th: t.h
       };
       return step();
     }).catch(function () { return step(); });
