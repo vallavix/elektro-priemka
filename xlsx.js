@@ -167,6 +167,12 @@
   function sheetXml(sh, drawingId) {
     var x = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
+    if (sh.print) x += '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>';
+    if (sh.freeze) {
+      x += '<sheetViews><sheetView workbookViewId="0">' +
+        '<pane ySplit="' + sh.freeze + '" topLeftCell="A' + (sh.freeze + 1) + '" activePane="bottomLeft" state="frozen"/>' +
+        '</sheetView></sheetViews>';
+    }
     if (sh.cols && sh.cols.length) {
       x += '<cols>';
       sh.cols.forEach(function (c, i) {
@@ -194,7 +200,15 @@
       sh.merges.forEach(function (m) { x += '<mergeCell ref="' + m + '"/>'; });
       x += '</mergeCells>';
     }
-    x += '<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>';
+    var pr = sh.print;
+    if (pr && pr.center) x += '<printOptions horizontalCentered="1"/>';
+    x += '<pageMargins left="' + (pr ? 0.3 : 0.4) + '" right="' + (pr ? 0.3 : 0.4) +
+      '" top="0.4" bottom="0.5" header="0.2" footer="0.2"/>';
+    if (pr) {
+      x += '<pageSetup paperSize="9" orientation="' + (pr.landscape ? 'landscape' : 'portrait') +
+        '" fitToWidth="1" fitToHeight="0" horizontalDpi="300" verticalDpi="300"/>' +
+        '<headerFooter><oddFooter>&amp;L' + esc(pr.foot || '') + '&amp;RСтр. &amp;P из &amp;N</oddFooter></headerFooter>';
+    }
     if (drawingId) x += '<drawing xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/>';
     x += '</worksheet>';
     return x;
@@ -205,6 +219,20 @@
     var a = 5381, b = 52711, n = u8.length, step = Math.max(1, n >> 10);
     for (var i = 0; i < n; i += step) { a = (a * 33 + u8[i]) >>> 0; b = (b * 31 + u8[i]) >>> 0; }
     return n + '_' + a.toString(36) + b.toString(36);
+  }
+
+  function sheetName(s) {
+    return s.name.slice(0, 31).replace(/[\\\/\?\*\[\]:]/g, '-');
+  }
+  /* «шапка повторяется на каждой странице» живёт в workbook.xml, а не в листе */
+  function definedNames(sheets) {
+    var out = sheets.map(function (s, i) {
+      if (!(s.print && s.print.titles)) return '';
+      var nm = "'" + sheetName(s).replace(/'/g, "''") + "'";
+      return '<definedName name="_xlnm.Print_Titles" localSheetId="' + i + '">' +
+        esc(nm + '!' + s.print.titles) + '</definedName>';
+    }).join('');
+    return out ? '<definedNames>' + out + '</definedNames>' : '';
   }
 
   function workbook(sheets) {
@@ -251,9 +279,9 @@
         '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
         sheets.map(function (s, i) {
-          return '<sheet name="' + esc(s.name.slice(0, 31).replace(/[\\\/\?\*\[\]:]/g, '-')) +
+          return '<sheet name="' + esc(sheetName(s)) +
             '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>';
-        }).join('') + '</sheets></workbook>'
+        }).join('') + '</sheets>' + definedNames(sheets) + '</workbook>'
     });
     files.push({
       name: 'xl/_rels/workbook.xml.rels',

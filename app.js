@@ -807,7 +807,55 @@ function exportXlsx() {
       });
       if (fs.length > 1) merges.push('A' + startRow + ':A' + (rowNo - 1));
     });
-    return { name: b.name, cols: cols, rows: rows, merges: merges };
+    return {
+      name: b.name, cols: cols, rows: rows, merges: merges, freeze: 3,
+      print: { landscape: true, titles: '$2:$3', center: true, foot: CFG.object + ' · ' + b.name }
+    };
+  });
+
+  /* ---- листы «В работу»: наряд электрикам, по одному на корпус ---- */
+  CFG.buildings.forEach(function (b) {
+    var d = DATA[b.id] || {}, rows = [], merges = [], rowNo = 3, any = false;
+    rows.push([{ v: b.name.toUpperCase() + ' — ЧТО ДОДЕЛАТЬ', s: 6 }]);
+    rows.push([{ v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: 'Что сделать', s: 1 }, { v: 'Готово', s: 1 }]);
+    merges.push('A1:D1');
+
+    floors(b).forEach(function (fl) {
+      var list = flatsOf(b, fl).filter(function (n) {
+        var s = status(d[n]); return s === 'bad' || s === 'warn';
+      });
+      if (!list.length) return;
+      any = true;
+      var startRow = rowNo;
+      list.forEach(function (n, i) {
+        var r = d[n];
+        var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
+          .map(function (p) { return p.n; }).join(', ');
+        var task = miss;
+        if (r.left) task += (task ? ' — ' : '') + r.left;
+        if (r.note) task += ' (' + r.note + ')';
+        if (r.crit) task = '⚠ ' + task;
+        rows.push([
+          i === 0 ? { v: fl, s: 2, n: true } : { v: '', s: 2 },
+          { v: n, s: 2, n: true },
+          { v: task || 'есть незакрытые пункты', s: 3 },
+          { v: '', s: 2 }
+        ]);
+        rowNo++;
+      });
+      if (list.length > 1) merges.push('A' + startRow + ':A' + (rowNo - 1));
+    });
+
+    if (!any) return;
+    sheets.push({
+      name: ('В работу — ' + b.name).slice(0, 31),
+      cols: [{ w: 7 }, { w: 8 }, { w: 74 }, { w: 10 }],
+      rows: rows, merges: merges, freeze: 2,
+      print: {
+        titles: '$2:$2', center: true,
+        foot: CFG.object + ' · ' + b.name + ' · ' + dateStamp()
+      }
+    });
   });
 
   /* лист замечаний — с настоящими фото, встроенными в ячейки */
@@ -855,7 +903,8 @@ function exportXlsx() {
     name: 'Замечания',
     cols: [{ w: 14 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }, { w: 28 }, { w: 32 }, { w: 20 },
     { w: 20 }, { w: 20 }, { w: 20 }],
-    rows: ir, merges: [], rowHeights: rowHeights, images: images
+    rows: ir, merges: [], rowHeights: rowHeights, images: images, freeze: 1,
+    print: { landscape: true, titles: '$1:$1', foot: CFG.object + ' · замечания' }
   });
 
   /* отдельный лист «Фото» — крупно, чтобы прорабу было видно без возни */
@@ -878,7 +927,8 @@ function exportXlsx() {
     sheets.push({
       name: 'Фото',
       cols: [{ w: 22 }, { w: 40 }, { w: 58 }],
-      rows: pr, merges: [], rowHeights: ph2, images: pimg
+      rows: pr, merges: [], rowHeights: ph2, images: pimg, freeze: 1,
+      print: { titles: '$1:$1', foot: CFG.object + ' · фото замечаний' }
     });
   }
 
