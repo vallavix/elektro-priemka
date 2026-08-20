@@ -742,8 +742,63 @@ function dateStamp() {
   return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
 }
 
+/* ---------- подготовка снимков к выгрузке ---------- */
+/* Для «Замечаний» делаем лёгкую копию (там картинка мелкая — незачем тащить оригинал),
+   для листа «Фото» берём оригинал. Заодно узнаём настоящие размеры в пикселях. */
+var THUMB_BOX = 165;   // px — сторона миниатюры в «Замечаниях»
+var BIG_W = 540;       // px — ширина снимка на листе «Фото»
+var BIG_H = 700;       // px — потолок по высоте для вертикальных кадров
+
+function loadImg(url) {
+  return new Promise(function (res, rej) {
+    var i = new Image();
+    i.onload = function () { res(i); };
+    i.onerror = function () { rej(new Error('снимок не читается')); };
+    i.src = url;
+  });
+}
+function fit(w, h, maxW, maxH) {
+  var s = Math.min(maxW / w, maxH / h, 1);
+  return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)) };
+}
+function preparePhotos(ids) {
+  var out = {}, i = 0;
+  function step() {
+    if (i >= ids.length) return Promise.resolve(out);
+    var id = ids[i++], url = PH[id];
+    if (!url) return step();
+    return loadImg(url).then(function (img) {
+      var big = fit(img.width, img.height, BIG_W, BIG_H);
+      /* миниатюра: рисуем с двойным запасом, чтобы на печати не мылила */
+      var t = fit(img.width, img.height, THUMB_BOX, THUMB_BOX);
+      var cv = document.createElement('canvas');
+      cv.width = t.w * 2; cv.height = t.h * 2;
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      out[id] = {
+        full: dataUrlToBytes(url), fw: big.w, fh: big.h,
+        thumb: dataUrlToBytes(cv.toDataURL('image/jpeg', 0.62)), tw: t.w, th: t.h
+      };
+      return step();
+    }).catch(function () { return step(); });
+  }
+  return step();
+}
+
 /* ---------- Excel ---------- */
 function exportXlsx() {
+  var ids = [];
+  CFG.buildings.forEach(function (b) {
+    var d = DATA[b.id] || {};
+    Object.keys(d).forEach(function (n) {
+      (d[n].ph || []).forEach(function (id) { if (PH[id] && ids.indexOf(id) < 0) ids.push(id); });
+    });
+  });
+  if (ids.length) toast('Готовлю снимки…');
+  preparePhotos(ids).then(function (IMG) { buildXlsx(IMG); })
+    .catch(function (e) { alert('Не удалось подготовить снимки: ' + e.message); });
+}
+
+function buildXlsx(IMG) {
   var C = window.colName;
   var sheets = CFG.buildings.map(function (b) {
     var d = DATA[b.id] || {};
@@ -879,10 +934,10 @@ function exportXlsx() {
       ir.push(row);
 
       (r.ph || []).slice(0, MAXPH).forEach(function (id, k) {
-        var u8 = dataUrlToBytes(PH[id]);
-        if (!u8) return;
-        images.push({ col: PHCOL + k, row: rowIdx, data: u8, name: photoName(b, x, k) });
-        rowHeights[rowIdx] = 120;
+        var im = IMG[id];
+        if (!im || !im.thumb) return;
+        images.push({ col: PHCOL + k, row: rowIdx, data: im.thumb, wpx: im.tw, hpx: im.th, name: photoName(b, x, k) });
+        rowHeights[rowIdx] = Math.max(rowHeights[rowIdx] || 0, window.XLS.rowHeightPx(im.th + 6));
       });
     });
   });
@@ -894,15 +949,16 @@ function exportXlsx() {
       if (!r || !(r.ph || []).length) return;
       var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; }).map(function (p) { return p.n; }).join(', ');
       r.ph.forEach(function (id, k) {
-        var u8 = dataUrlToBytes(PH[id]);
-        if (u8) big.push({ b: b, x: x, r: r, k: k, data: u8, miss: miss });
+        var im = IMG[id];
+        if (im && im.full) big.push({ b: b, x: x, r: r, k: k, im: im, miss: miss });
       });
     });
   });
   sheets.push({
     name: 'Замечания',
     cols: [{ w: 14 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }, { w: 28 }, { w: 32 }, { w: 20 },
-    { w: 20 }, { w: 20 }, { w: 20 }],
+    { w: window.XLS.colWidthPx(THUMB_BOX + 8) }, { w: window.XLS.colWidthPx(THUMB_BOX + 8) },
+    { w: window.XLS.colWidthPx(THUMB_BOX + 8) }],
     rows: ir, merges: [], rowHeights: rowHeights, images: images, freeze: 1,
     print: { landscape: true, titles: '$1:$1', foot: CFG.object + ' · замечания' }
   });
@@ -920,13 +976,13 @@ function exportXlsx() {
         { v: (it.r.left || it.miss || '') + (it.r.note ? '\n' + it.r.note : ''), s: 3 },
         { v: '', s: 2 }
       ]);
-      pimg.push({ col: 2, row: rowIdx, data: it.data, maxH: 300, maxW: 400,
+      pimg.push({ col: 2, row: rowIdx, data: it.im.full, wpx: it.im.fw, hpx: it.im.fh,
         name: photoName(it.b, it.x, it.k) });
-      ph2[rowIdx] = 310;
+      ph2[rowIdx] = window.XLS.rowHeightPx(it.im.fh + 8);
     });
     sheets.push({
       name: 'Фото',
-      cols: [{ w: 22 }, { w: 40 }, { w: 58 }],
+      cols: [{ w: 22 }, { w: 40 }, { w: window.XLS.colWidthPx(BIG_W + 10) }],
       rows: pr, merges: [], rowHeights: ph2, images: pimg, freeze: 1,
       print: { titles: '$1:$1', foot: CFG.object + ' · фото замечаний' }
     });

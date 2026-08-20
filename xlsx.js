@@ -134,28 +134,36 @@
     return { w: 400, h: 300 };
   }
 
-  var EMU = 12700; // EMU в одном пункте
+  var EMU = 12700;      // EMU в одном пункте
+  var EMU_PX = 9525;    // EMU в одном пикселе (96 dpi) — в этих же единицах считает Excel
 
-  /* images: [{col, row, data:Uint8Array, maxH}] — картинка ставится в ячейку,
-     пропорции сохраняются (oneCellAnchor с явным размером). */
+  /* images: [{col, row, data:Uint8Array, wpx, hpx}] — картинка ставится в ячейку
+     точным размером в пикселях; если wpx не задан, падаем на старый расчёт по maxH. */
   function drawingXml(images) {
     var x = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
       'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">';
     images.forEach(function (im, i) {
-      var sz = imgSize(im.data), maxH = im.maxH || 92;
-      var s = maxH / sz.h, w = Math.round(sz.w * s), hh = maxH;
-      if (w > (im.maxW || 130)) { var s2 = (im.maxW || 130) / w; w = Math.round(w * s2); hh = Math.round(hh * s2); }
+      var cx, cy;
+      if (im.wpx) {
+        cx = Math.round(im.wpx * EMU_PX); cy = Math.round(im.hpx * EMU_PX);
+      } else {
+        var sz = imgSize(im.data), maxH = im.maxH || 92;
+        var s = maxH / sz.h, w = Math.round(sz.w * s), hh = maxH;
+        if (w > (im.maxW || 130)) { var s2 = (im.maxW || 130) / w; w = Math.round(w * s2); hh = Math.round(hh * s2); }
+        cx = Math.round(w * EMU); cy = Math.round(hh * EMU);
+      }
+      var off = Math.round(2 * EMU_PX);
       x += '<xdr:oneCellAnchor>' +
-        '<xdr:from><xdr:col>' + im.col + '</xdr:col><xdr:colOff>' + (3 * EMU) + '</xdr:colOff>' +
-        '<xdr:row>' + im.row + '</xdr:row><xdr:rowOff>' + (3 * EMU) + '</xdr:rowOff></xdr:from>' +
-        '<xdr:ext cx="' + Math.round(w * EMU) + '" cy="' + Math.round(hh * EMU) + '"/>' +
+        '<xdr:from><xdr:col>' + im.col + '</xdr:col><xdr:colOff>' + off + '</xdr:colOff>' +
+        '<xdr:row>' + im.row + '</xdr:row><xdr:rowOff>' + off + '</xdr:rowOff></xdr:from>' +
+        '<xdr:ext cx="' + cx + '" cy="' + cy + '"/>' +
         '<xdr:pic><xdr:nvPicPr>' +
         '<xdr:cNvPr id="' + (i + 2) + '" name="' + esc(im.name || ('Фото ' + (i + 1))) + '"/>' +
         '<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>' +
         '<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
         'r:embed="rId' + (i + 1) + '"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>' +
-        '<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + Math.round(w * EMU) + '" cy="' + Math.round(hh * EMU) + '"/></a:xfrm>' +
+        '<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm>' +
         '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>' +
         '</xdr:pic><xdr:clientData/></xdr:oneCellAnchor>';
     });
@@ -320,5 +328,10 @@
     return zip(files, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
 
-  g.XLS = { workbook: workbook, zip: zip, colName: colName };
+  /* Excel меряет ширину колонки в символах, а высоту строки в пунктах.
+     Чтобы ячейка совпала с картинкой, переводим из пикселей. */
+  function colWidthPx(px) { return Math.round(((px - 5) / 7) * 100) / 100; }
+  function rowHeightPx(px) { return Math.round(px * 0.75 * 10) / 10; }
+
+  g.XLS = { workbook: workbook, zip: zip, colName: colName, colWidthPx: colWidthPx, rowHeightPx: rowHeightPx };
 })(window);
