@@ -66,6 +66,8 @@ var DEFAULT_COUNT = [
   { id: 'c5', n: 'Люстры', price: 0 }
 ];
 
+var DEFAULT_CREWS = [{ id: 'w1', n: 'Моя бригада' }];
+
 var DEFAULT_CFG = {
   object: 'ЖК Северный',
   buildings: [
@@ -91,11 +93,13 @@ function load() {
   try { CFG = JSON.parse(localStorage.getItem('shm_cfg')) || null; } catch (e) { CFG = null; }
   if (!CFG || !CFG.buildings) CFG = JSON.parse(JSON.stringify(DEFAULT_CFG));
   if (!CFG.count || !CFG.count.length) CFG.count = JSON.parse(JSON.stringify(DEFAULT_COUNT));
+  if (!CFG.crews || !CFG.crews.length) CFG.crews = JSON.parse(JSON.stringify(DEFAULT_CREWS));
   try { DATA = JSON.parse(localStorage.getItem('shm_data')) || {}; } catch (e) { DATA = {}; }
   try { UI = JSON.parse(localStorage.getItem('shm_ui')) || {}; } catch (e) { UI = {}; }
   if (!UI.b) UI.b = CFG.buildings[0].id;
   if (UI.floor == null) UI.floor = CFG.buildings[0].from;
   UI.tab = UI.tab || 'obj';
+  if (!UI.crew || !CFG.crews.some(function (w) { return w.id === UI.crew; })) UI.crew = CFG.crews[0].id;
 }
 var saveT;
 function save() {
@@ -234,6 +238,57 @@ function expBuildings() {
 function expSuffix() {
   var bs = expBuildings();
   return bs.length === CFG.buildings.length ? '' : '_' + bs[0].name.replace(/\s+/g, '');
+}
+/* ---- наряд по обходу: что сделано за период и какой бригадой ---- */
+function crewName(id) {
+  var w = CFG.crews.filter(function (x) { return x.id === id; })[0];
+  return w ? w.n : 'без бригады';
+}
+function dayStart(shiftDays) {
+  var d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - (shiftDays || 0));
+  return d.getTime();
+}
+var PERIODS = {
+  today: { n: 'Сегодня', from: function () { return dayStart(0); }, to: function () { return Infinity; } },
+  yest: { n: 'Вчера', from: function () { return dayStart(1); }, to: function () { return dayStart(0); } },
+  week: { n: '7 дней', from: function () { return dayStart(6); }, to: function () { return Infinity; } },
+  all: { n: 'Всё время', from: function () { return 0; }, to: function () { return Infinity; } }
+};
+/* Собираем строки наряда: квартира -> сколько сделано за период этой бригадой */
+function naryad(period, crew) {
+  var P = PERIODS[period] || PERIODS.today, from = P.from(), to = P.to();
+  var out = [], totals = {}, grand = 0, gmoney = 0;
+  expBuildings().forEach(function (b) {
+    var d = DATA[b.id] || {};
+    allFlats(b).forEach(function (x) {
+      var r = d[x.n];
+      if (!r || !r.lg || !r.lg.length) return;
+      var per = {}, sum = 0, money2 = 0, last = 0, crews = {};
+      r.lg.forEach(function (e) {
+        if (e.t < from || e.t >= to) return;
+        if (crew !== 'all' && e.w !== crew) return;
+        if (e.d <= 0) return;                    /* в наряд идёт только сделанное */
+        per[e.c] = (per[e.c] || 0) + e.d;
+        sum += e.d;
+        crews[e.w] = 1;
+        if (e.t > last) last = e.t;
+      });
+      if (!sum) return;
+      CFG.count.forEach(function (c) {
+        var price = +c.price || 0;
+        money2 += (per[c.id] || 0) * price;
+        totals[c.id] = (totals[c.id] || 0) + (per[c.id] || 0);
+      });
+      grand += sum; gmoney += money2;
+      out.push({
+        b: b, f: x.f, n: x.n, per: per, sum: sum, money: money2, last: last,
+        crews: Object.keys(crews).map(crewName).join(', '), r: r
+      });
+    });
+  });
+  return { rows: out, totals: totals, grand: grand, money: gmoney, period: P.n, crew: crew === 'all' ? 'все бригады' : crewName(crew) };
 }
 function money(v) {
   return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
@@ -490,12 +545,18 @@ function viewCount() {
       '<em>№' + (idx + 1) + '</em><span class="qbadge' + (t ? ' on' : '') + '">' + (t || '·') + '</span></button>';
   }).join('');
 
+  var crews = CFG.crews.length > 1 || CFG.crews[0].n !== DEFAULT_CREWS[0].n
+    ? '<div class="sec">Кто работает</div><div class="tabs">' + CFG.crews.map(function (w) {
+      return '<button class="tab ' + (UI.crew === w.id ? 'on' : '') + '" data-crew="' + w.id + '">' +
+        I.user + h(w.n) + '</button>';
+    }).join('') + '</div>' : '';
+
   return topbar({
     left: '<button class="iconbtn" data-act="pickb">' + I.dots + '</button>',
-    title: 'Подсчёт', sub: h(b.name),
+    title: 'Подсчёт', sub: h(b.name) + ' · ' + h(crewName(UI.crew)),
     right: '<button class="iconbtn" data-act="settings">' + I.gear + '</button>'
   }) +
-    '<div class="screen">' +
+    '<div class="screen">' + crews +
     '<div class="card prog"><div class="prog-top"><div>' +
     '<div class="prog-lbl">Всего по корпусу</div><div class="prog-num">' + all.total + ' <span style="font-size:18px;font-weight:600">шт.</span></div></div>' +
     '<div style="text-align:right">' +
@@ -602,6 +663,34 @@ function viewExport() {
     '<div class="hint">Файл по форме начальника: лист на каждый корпус + лист «Замечания». Открывается в Excel и Numbers.</div>' +
     '<button class="btn btn-ghost" data-act="photozip">' + I.cam + ' Скачать фото (.zip)</button>' +
     '<div class="hint">Имена файлов — Корпус_Этаж_Кв.jpg, совпадают с колонкой «Фото» в листе замечаний.</div>' +
+    /* ---- наряд по обходу ---- */
+    (function () {
+      var per = UI.nper || 'today', nc = UI.ncrew || 'all';
+      var nd = naryad(per, nc);
+      return '<div class="sec" style="margin-top:26px">Наряд по обходу</div>' +
+        '<div class="tabs">' + Object.keys(PERIODS).map(function (k) {
+          return '<button class="tab ' + (per === k ? 'on' : '') + '" data-per="' + k + '">' + PERIODS[k].n + '</button>';
+        }).join('') + '</div>' +
+        (CFG.crews.length > 1 ? '<div class="tabs">' +
+          '<button class="tab ' + (nc === 'all' ? 'on' : '') + '" data-ncrew="all">Все бригады</button>' +
+          CFG.crews.map(function (w) {
+            return '<button class="tab ' + (nc === w.id ? 'on' : '') + '" data-ncrew="' + w.id + '">' + h(w.n) + '</button>';
+          }).join('') + '</div>' : '') +
+        '<div class="card prog" style="margin-bottom:12px"><div class="prog-top"><div>' +
+        '<div class="prog-lbl">Сделано за период</div>' +
+        '<div class="prog-num">' + nd.grand + ' <span style="font-size:17px;font-weight:600">шт.</span></div></div>' +
+        '<div style="text-align:right">' +
+        (hasPrices() ? '<div style="font-size:18px;font-weight:700;color:var(--ok)">' + money(nd.money) + '</div>' : '') +
+        '<div class="prog-cnt">квартир: ' + nd.rows.length + '</div></div></div>' +
+        (nd.grand ? '<div class="qrow">' + CFG.count.map(function (c) {
+          return nd.totals[c.id] ? '<span class="qchip"><b>' + nd.totals[c.id] + '</b>' + h(c.n) + '</span>' : '';
+        }).join('') + '</div>' : '') + '</div>' +
+        '<button class="btn btn-primary" data-act="naryad"' + (nd.grand ? '' : ' disabled') + '>' +
+        I.file + ' Скачать наряд' + '</button>' +
+        '<div class="hint">Только то, что отмечено на вкладке «Подсчёт» за выбранный период — чтобы отдать бригаде именно её обход, а не весь дом. ' +
+        'Замечания и фото за этот же период идут вторым листом.</div>';
+    })() +
+
     '<div class="sec" style="margin-top:26px">Напарник</div>' +
     '<button class="btn btn-ghost" data-act="share" style="margin-bottom:10px">' + I.share + ' Передать напарнику</button>' +
     '<button class="btn btn-ghost" data-act="merge">' + I.merge + ' Принять от напарника</button>' +
@@ -708,6 +797,16 @@ function viewSettings() {
     '<button class="btn btn-ghost mini-btn" data-act="addc">' + I.plus + ' Добавить позицию подсчёта</button>' +
     '<div class="hint">Что считаешь поштучно на вкладке «Подсчёт». Цену можно оставить нулём — тогда будут только штуки, без сумм.</div>' +
 
+    '<div class="sec" style="margin-top:26px">Бригады</div>' +
+    '<div class="card">' + CFG.crews.map(function (w, i) {
+      return '<div class="drag"><span class="item-ico">' + I.user + '</span>' +
+        '<input type="text" data-w="' + i + '" value="' + h(w.n) + '">' +
+        (CFG.crews.length > 1 ? '<button class="iconbtn mini" data-delw="' + i + '" style="color:var(--bad)" aria-label="убрать">' + I.trash + '</button>' : '') +
+        '</div>';
+    }).join('') + '</div>' +
+    '<button class="btn btn-ghost mini-btn" data-act="addw">' + I.plus + ' Добавить бригаду</button>' +
+    '<div class="hint">Перед обходом выбери на вкладке «Подсчёт», кто работает. Тогда наряд можно будет выгрузить отдельно по каждой бригаде.</div>' +
+
     '<div class="sec" style="margin-top:24px">Данные</div>' +
     '<button class="btn btn-ghost" data-act="restore" style="margin-bottom:10px">Загрузить резервную копию</button>' +
     '<button class="btn btn-ghost" data-act="wipe" style="color:var(--bad)">Стереть все отметки</button>' +
@@ -757,6 +856,25 @@ function bind() {
   app.querySelectorAll('[data-filter]').forEach(function (el) {
     el.onclick = function () { VIEW.filter = el.dataset.filter; render(); };
   });
+  app.querySelectorAll('[data-crew]').forEach(function (el) {
+    el.onclick = function () { UI.crew = el.dataset.crew; vibr(6); save(); render(); };
+  });
+  app.querySelectorAll('[data-per]').forEach(function (el) {
+    el.onclick = function () { UI.nper = el.dataset.per; save(); render(); };
+  });
+  app.querySelectorAll('[data-ncrew]').forEach(function (el) {
+    el.onclick = function () { UI.ncrew = el.dataset.ncrew; save(); render(); };
+  });
+  app.querySelectorAll('[data-w]').forEach(function (el) {
+    el.onchange = function () { CFG.crews[+el.dataset.w].n = el.value; save(); };
+  });
+  app.querySelectorAll('[data-delw]').forEach(function (el) {
+    el.onclick = function () {
+      if (CFG.crews.length <= 1) return;
+      if (!confirm('Убрать «' + CFG.crews[+el.dataset.delw].n + '»? Уже записанные обходы останутся.')) return;
+      CFG.crews.splice(+el.dataset.delw, 1); save(); render();
+    };
+  });
   app.querySelectorAll('[data-expb]').forEach(function (el) {
     el.onclick = function () { UI.expB = el.dataset.expb; save(); render(); };
   });
@@ -772,9 +890,13 @@ function bind() {
   app.querySelectorAll('[data-q]').forEach(function (el) {
     el.onclick = function () {
       var p = el.dataset.q.split('|'), r = rec(UI.b, VIEW.flat, true);
-      var v = qOf(r, p[0]) + (+p[1]);
+      var was = qOf(r, p[0]), v = was + (+p[1]);
       if (v < 0) v = 0;
+      if (v === was) return;
       if (v) r.q[p[0]] = v; else delete r.q[p[0]];
+      /* журнал: кто и когда — из него собирается наряд по обходу */
+      r.lg = r.lg || [];
+      r.lg.push({ c: p[0], d: v - was, t: Date.now(), w: UI.crew });
       r.ts = Date.now(); vibr(8); save(); render();
     };
   });
@@ -936,6 +1058,9 @@ function act(a, el) {
   switch (a) {
     case 'back': go('obj'); break;
     case 'backcount': go('count'); break;
+    case 'addw':
+      CFG.crews.push({ id: 'w' + Date.now(), n: 'Бригада ' + (CFG.crews.length + 1) });
+      save(); render(); break;
     case 'addc':
       CFG.count.push({ id: 'c' + Date.now(), n: 'Новая позиция', price: 0 });
       save(); render(); break;
@@ -984,6 +1109,7 @@ function act(a, el) {
     case 'applymerge': applyMerge(); break;
     case 'cancelmerge': PENDING = null; go('export'); break;
 
+    case 'naryad': exportNaryad(); break;
     case 'xlsx': exportXlsx(); break;
     case 'photozip': exportPhotos(); break;
     case 'backup': backup(); break;
@@ -1364,6 +1490,98 @@ function buildXlsx(IMG) {
     toast('Шахматка выгружена');
   } catch (e) { alert('Не удалось собрать файл: ' + e.message); }
 }
+/* ---------- наряд бригаде: только этот обход ---------- */
+function exportNaryad() {
+  var nd = naryad(UI.nper || 'today', UI.ncrew || 'all');
+  if (!nd.grand) { toast('За этот период ничего не отмечено'); return; }
+  var ids = [];
+  nd.rows.forEach(function (x) {
+    (x.r.ph || []).forEach(function (id) { if (PH[id] && ids.indexOf(id) < 0) ids.push(id); });
+  });
+  if (ids.length) toast('Готовлю наряд…');
+  preparePhotos(ids).then(function (IMG) { buildNaryad(nd, IMG); })
+    .catch(function () { buildNaryad(nd, {}); });
+}
+function buildNaryad(nd, IMG) {
+  var C = window.colName, withPrice = hasPrices(), nC = CFG.count.length;
+  var lastCol = 3 + nC + (withPrice ? 1 : 0);
+  var rows = [], merges = [];
+
+  rows.push([{ v: 'НАРЯД — ' + nd.crew.toUpperCase(), s: 6 }]);
+  merges.push('A1:' + C(lastCol) + '1');
+  rows.push([{ v: CFG.object + ' · ' + nd.period + ' · выгружено ' + dateStamp(), s: 3 }]);
+  merges.push('A2:' + C(lastCol) + '2');
+
+  var hdr = [{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }];
+  CFG.count.forEach(function (c) { hdr.push({ v: c.n, s: 1 }); });
+  hdr.push({ v: 'Всего шт.', s: 1 });
+  if (withPrice) hdr.push({ v: 'Сумма, ₽', s: 1 });
+  rows.push(hdr);
+
+  nd.rows.sort(function (a, z) {
+    return a.b.name.localeCompare(z.b.name) || a.f - z.f || a.n - z.n;
+  }).forEach(function (x) {
+    var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true }];
+    CFG.count.forEach(function (c) {
+      row.push(x.per[c.id] ? { v: x.per[c.id], s: 2, n: true } : { v: '', s: 2 });
+    });
+    row.push({ v: x.sum, s: 2, n: true });
+    if (withPrice) row.push({ v: Math.round(x.money), s: 2, n: true });
+    rows.push(row);
+  });
+
+  var trow = [{ v: 'ИТОГО', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }];
+  CFG.count.forEach(function (c) { trow.push({ v: nd.totals[c.id] || 0, s: 1, n: true }); });
+  trow.push({ v: nd.grand, s: 1, n: true });
+  if (withPrice) trow.push({ v: Math.round(nd.money), s: 1, n: true });
+  rows.push(trow);
+  merges.push('A' + rows.length + ':C' + rows.length);
+
+  var cols = [{ w: 13 }, { w: 7 }, { w: 8 }];
+  CFG.count.forEach(function () { cols.push({ w: 13 }); });
+  cols.push({ w: 11 });
+  if (withPrice) cols.push({ w: 13 });
+
+  var sheets = [{
+    name: 'Наряд', cols: cols, rows: rows, merges: merges, freeze: 3,
+    print: { titles: '$3:$3', center: true, foot: CFG.object + ' · ' + nd.crew + ' · ' + nd.period }
+  }];
+
+  /* второй лист — замечания и фото по тем же квартирам */
+  var ir = [[{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 },
+  { v: 'Замечание', s: 1 }, { v: 'Фото', s: 1 }]];
+  var images = [], rh = {};
+  nd.rows.forEach(function (x) {
+    var r = x.r;
+    var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
+      .map(function (p) { return p.n; }).join(', ');
+    var txt = r.left || miss;
+    if (!txt && !(r.ph || []).length) return;
+    var rowIdx = ir.length;
+    ir.push([{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
+    { v: txt + (r.note ? '\n' + r.note : ''), s: 3 }, { v: '', s: 2 }]);
+    var id = (r.ph || [])[0], im = id && IMG[id];
+    if (im && im.full) {
+      images.push({ col: 4, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, 0) });
+      rh[rowIdx] = window.XLS.rowHeightPx(im.fh + 8);
+    }
+  });
+  if (ir.length > 1) {
+    sheets.push({
+      name: 'Замечания обхода',
+      cols: [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 46 }, { w: window.XLS.colWidthPx(BIG_W + 10) }],
+      rows: ir, merges: [], rowHeights: rh, images: images, freeze: 1,
+      print: { titles: '$1:$1', foot: CFG.object + ' · замечания обхода' }
+    });
+  }
+
+  try {
+    download(window.XLS.workbook(sheets),
+      'Наряд_' + nd.crew.replace(/\s+/g, '_') + '_' + dateStamp() + '.xlsx');
+    toast('Наряд готов');
+  } catch (e) { alert('Не удалось собрать наряд: ' + e.message); }
+}
+
 function photoName(b, x, i) {
   return b.name.replace(/\s+/g, '') + '_эт' + x.f + '_кв' + x.n + (i ? '_' + (i + 1) : '') + '.jpg';
 }

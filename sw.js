@@ -1,5 +1,5 @@
 /* Офлайн-кэш. При правках файлов поднимай версию — иначе телефон отдаст старое. */
-var V = 'ep-v8';
+var V = 'ep-v9';
 var FILES = ['./', './index.html', './app.css', './app.js', './xlsx.js',
   './manifest.json', './icon-180.png', './icon-512.png'];
 
