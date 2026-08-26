@@ -36,7 +36,8 @@ var I = (function () {
     merge: s('<path d="M7 21V9a4 4 0 0 0 4 4h3"/><circle cx="7" cy="5" r="2.5"/><circle cx="17" cy="13" r="2.5"/>'),
     user: s('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'),
     up: s('<path d="m18 15-6-6-6 6"/>'),
-    down: s('<path d="m6 9 6 6 6-6"/>')
+    down: s('<path d="m6 9 6 6 6-6"/>'),
+    calc: s('<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15v4M8 19h4"/>')
   };
 })();
 /* иконку подбираем по названию, а не по порядку — иначе она едет при добавлении позиции */
@@ -56,6 +57,15 @@ function posIcon(name) {
 }
 
 /* ============ конфигурация по умолчанию ============ */
+/* что считаем на сдельщине: штуки по квартире, цена за штуку необязательна */
+var DEFAULT_COUNT = [
+  { id: 'c1', n: 'Розетки', price: 0 },
+  { id: 'c2', n: 'Выключатели', price: 0 },
+  { id: 'c3', n: 'Светильники', price: 0 },
+  { id: 'c4', n: 'Бра', price: 0 },
+  { id: 'c5', n: 'Люстры', price: 0 }
+];
+
 var DEFAULT_CFG = {
   object: 'ЖК Северный',
   buildings: [
@@ -80,6 +90,7 @@ var CFG, DATA, UI;
 function load() {
   try { CFG = JSON.parse(localStorage.getItem('shm_cfg')) || null; } catch (e) { CFG = null; }
   if (!CFG || !CFG.buildings) CFG = JSON.parse(JSON.stringify(DEFAULT_CFG));
+  if (!CFG.count || !CFG.count.length) CFG.count = JSON.parse(JSON.stringify(DEFAULT_COUNT));
   try { DATA = JSON.parse(localStorage.getItem('shm_data')) || {}; } catch (e) { DATA = {}; }
   try { UI = JSON.parse(localStorage.getItem('shm_ui')) || {}; } catch (e) { UI = {}; }
   if (!UI.b) UI.b = CFG.buildings[0].id;
@@ -182,8 +193,50 @@ function allFlats(b) {
 }
 function rec(bid, n, create) {
   DATA[bid] = DATA[bid] || {};
-  if (!DATA[bid][n] && create) DATA[bid][n] = { st: {}, left: '', note: '', crit: false, ph: [], ts: 0 };
+  if (!DATA[bid][n] && create) DATA[bid][n] = { st: {}, q: {}, left: '', note: '', crit: false, ph: [], ts: 0 };
+  if (DATA[bid][n] && !DATA[bid][n].q) DATA[bid][n].q = {};
   return DATA[bid][n];
+}
+/* ---- подсчёт на сдельщине ---- */
+function qOf(r, cid) { return (r && r.q && r.q[cid]) || 0; }
+function qTotal(r) {
+  var s = 0;
+  CFG.count.forEach(function (c) { s += qOf(r, c.id); });
+  return s;
+}
+function qMoney(r) {
+  var s = 0;
+  CFG.count.forEach(function (c) { s += qOf(r, c.id) * (+c.price || 0); });
+  return s;
+}
+function hasPrices() {
+  return CFG.count.some(function (c) { return +c.price > 0; });
+}
+function qSum(b, floorOnly) {
+  var d = DATA[b.id] || {}, per = {}, total = 0, money = 0, flats = 0;
+  var list = floorOnly == null ? allFlats(b) : flatsOf(b, floorOnly).map(function (n) { return { n: n }; });
+  list.forEach(function (x) {
+    var r = d[x.n];
+    if (!r) return;
+    var t = qTotal(r);
+    if (t) flats++;
+    total += t; money += qMoney(r);
+    CFG.count.forEach(function (c) { per[c.id] = (per[c.id] || 0) + qOf(r, c.id); });
+  });
+  return { per: per, total: total, money: money, flats: flats };
+}
+/* какие корпуса уходят в выгрузку: все или один выбранный */
+function expBuildings() {
+  if (!UI.expB || UI.expB === 'all') return CFG.buildings;
+  var one = CFG.buildings.filter(function (b) { return b.id === UI.expB; });
+  return one.length ? one : CFG.buildings;
+}
+function expSuffix() {
+  var bs = expBuildings();
+  return bs.length === CFG.buildings.length ? '' : '_' + bs[0].name.replace(/\s+/g, '');
+}
+function money(v) {
+  return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 }
 function status(r) {
   if (!r) return 'new';
@@ -217,7 +270,7 @@ function toast(msg) {
 var VIEW = { name: 'obj' }; // obj | flat | issues | export | settings
 function go(name, opt) {
   VIEW = Object.assign({ name: name }, opt || {});
-  if (name === 'obj' || name === 'issues' || name === 'export' || name === 'settings') UI.tab = name;
+  if (['obj','issues','export','settings','count'].indexOf(name) >= 0) UI.tab = name;
   save();
   render();
   window.scrollTo(0, 0);
@@ -226,7 +279,7 @@ function go(name, opt) {
 /* ============ рендер ============ */
 var app;
 function render() {
-  var f = { obj: viewObject, flat: viewFlat, issues: viewIssues, export: viewExport, settings: viewSettings, mergeview: viewMerge }[VIEW.name];
+  var f = { obj: viewObject, flat: viewFlat, issues: viewIssues, export: viewExport, settings: viewSettings, mergeview: viewMerge, count: viewCount, cflat: viewCountFlat }[VIEW.name];
   app.innerHTML = f();
   bind();
 }
@@ -410,13 +463,84 @@ function photosHtml(r) {
   }).join('') +
     '<button class="photo-add" data-act="addph" aria-label="Добавить фото">' + I.cam + '</button>';
 }
-function navbar(prev, next) {
+function navbar(prev, next, kind) {
+  var attr = kind === 'cflat' ? 'data-cnav' : 'data-nav';
   return '<div class="navbar">' +
-    '<button class="btn btn-ghost" data-nav="' + (prev ? prev.n : '') + '"' + (prev ? '' : ' disabled') + '>' +
+    '<button class="btn btn-ghost" ' + attr + '="' + (prev ? prev.n : '') + '"' + (prev ? '' : ' disabled') + '>' +
     I.left + '<span class="lb"><i>Предыдущая</i>Кв. ' + (prev ? prev.n : '—') + '</span></button>' +
-    '<button class="btn btn-primary" data-nav="' + (next ? next.n : '') + '"' + (next ? '' : ' disabled') + '>' +
+    '<button class="btn btn-primary" ' + attr + '="' + (next ? next.n : '') + '"' + (next ? '' : ' disabled') + '>' +
     '<span class="lb"><i>Следующая</i>Кв. ' + (next ? next.n : '—') + '</span>' + I.right + '</button>' +
     '</div>';
+}
+
+/* ---------- режим подсчёта: объект ---------- */
+function viewCount() {
+  var b = bld(), d = DATA[b.id] || {};
+  var all = qSum(b), fl = qSum(b, UI.floor);
+
+  var floorsHtml = floors(b).map(function (f) {
+    var s = qSum(b, f);
+    return '<button class="floor ' + (f === UI.floor ? 'on' : '') + (s.total ? ' done' : '') +
+      '" data-floor="' + f + '">' + f + '<u>' + (s.total || '—') + '</u></button>';
+  }).join('');
+
+  var flatsHtml = flatsOf(b, UI.floor).map(function (num, idx) {
+    var t = qTotal(d[num]);
+    return '<button class="flat ' + (t ? 's-ok' : 's-new') + '" data-cflat="' + num + '"><b>' + num + '</b>' +
+      '<em>№' + (idx + 1) + '</em><span class="qbadge' + (t ? ' on' : '') + '">' + (t || '·') + '</span></button>';
+  }).join('');
+
+  return topbar({
+    left: '<button class="iconbtn" data-act="pickb">' + I.dots + '</button>',
+    title: 'Подсчёт', sub: h(b.name),
+    right: '<button class="iconbtn" data-act="settings">' + I.gear + '</button>'
+  }) +
+    '<div class="screen">' +
+    '<div class="card prog"><div class="prog-top"><div>' +
+    '<div class="prog-lbl">Всего по корпусу</div><div class="prog-num">' + all.total + ' <span style="font-size:18px;font-weight:600">шт.</span></div></div>' +
+    '<div style="text-align:right">' +
+    (hasPrices() ? '<div style="font-size:19px;font-weight:700;color:var(--ok)">' + money(all.money) + '</div>' : '') +
+    '<div class="prog-cnt">посчитано квартир: ' + all.flats + '</div></div></div>' +
+    '<div class="qrow">' + CFG.count.map(function (c) {
+      return '<span class="qchip"><b>' + (all.per[c.id] || 0) + '</b>' + h(c.n) + '</span>';
+    }).join('') + '</div></div>' +
+
+    '<div class="sec">Этажи · на этаже ' + fl.total + ' шт.</div>' +
+    '<div class="floors" id="floors">' + floorsHtml + '</div>' +
+    '<div class="flats">' + flatsHtml + '</div>' +
+    '<div class="hint">Цифра в кружке — сколько всего посчитано в квартире. Цены за штуку задаются в Настройках, тогда сразу считается и сумма.</div>' +
+    '</div>' + tabbar();
+}
+
+/* ---------- режим подсчёта: квартира ---------- */
+function viewCountFlat() {
+  var b = bld(), num = VIEW.flat, r = rec(b.id, num, true);
+  var list = seq(), i = list.findIndex(function (x) { return x.n === num; });
+  var prev = i > 0 ? list[i - 1] : null, next = i < list.length - 1 ? list[i + 1] : null;
+
+  var rows = CFG.count.map(function (c) {
+    var v = qOf(r, c.id);
+    return '<div class="qitem"><span class="item-ico">' + posIcon(c.n) + '</span>' +
+      '<span class="qname">' + h(c.n) +
+      (+c.price > 0 ? '<i>' + money(v * (+c.price)) + '</i>' : '') + '</span>' +
+      '<span class="qctl">' +
+      '<button class="qbtn" data-q="' + c.id + '|-1"' + (v ? '' : ' disabled') + ' aria-label="минус">' + I.minus + '</button>' +
+      '<b class="qval' + (v ? ' on' : '') + '">' + v + '</b>' +
+      '<button class="qbtn plus" data-q="' + c.id + '|1" aria-label="плюс">' + I.plus + '</button>' +
+      '</span></div>';
+  }).join('');
+
+  var t = qTotal(r);
+  return topbar({
+    left: '<button class="iconbtn" data-act="backcount">' + I.left + '</button>',
+    title: 'Кв. ' + num + ' · подсчёт',
+    sub: 'Этаж ' + list[i].f + ' · всего ' + t + ' шт.' + (hasPrices() ? ' · ' + money(qMoney(r)) : ''),
+    right: '<button class="iconbtn" data-act="clearq">' + I.trash + '</button>'
+  }) +
+    '<div class="screen"><div class="items">' + rows + '</div>' +
+    '<div class="hint">Считается отдельно от приёмки: галочки и замечания эти цифры не трогают. ' +
+    'Всё лежит в одной базе, попадает в резервную копию и в обмен с напарником.</div>' +
+    '</div>' + navbar(prev, next, 'cflat');
 }
 
 /* ---------- экран «Замечания» ---------- */
@@ -465,8 +589,15 @@ function tabBtn(id, label, n, cur) {
 /* ---------- экран выгрузки ---------- */
 function viewExport() {
   var b = bld(), mode = VIEW.pv || 'sh';
+  var cur = UI.expB || 'all';
+  var picker = '<div class="sec">Что выгружать</div><div class="tabs">' +
+    '<button class="tab ' + (cur === 'all' ? 'on' : '') + '" data-expb="all">Весь объект</button>' +
+    CFG.buildings.map(function (x) {
+      return '<button class="tab ' + (cur === x.id ? 'on' : '') + '" data-expb="' + x.id + '">' + h(x.name) + '</button>';
+    }).join('') + '</div>';
+
   return topbar({ left: '<span style="width:44px"></span>', title: 'Выгрузка', right: '<span style="width:44px"></span>' }) +
-    '<div class="screen">' +
+    '<div class="screen">' + picker +
     '<button class="btn btn-primary btn-lg" data-act="xlsx">' + I.file + ' Скачать шахматку (.xlsx)</button>' +
     '<div class="hint">Файл по форме начальника: лист на каждый корпус + лист «Замечания». Открывается в Excel и Numbers.</div>' +
     '<button class="btn btn-ghost" data-act="photozip">' + I.cam + ' Скачать фото (.zip)</button>' +
@@ -565,6 +696,18 @@ function viewSettings() {
     '<div class="hint">Раздел — это заголовок в чек-листе и объединённая шапка в Excel. ' +
     'Порядок разделов и позиций внутри — такой же, как будет в шахматке. ' +
     'У первого раздела название можно не писать, тогда колонки идут в Excel по отдельности.</div>' +
+    '<div class="sec" style="margin-top:26px">Подсчёт на сдельщине</div>' +
+    '<div class="card">' + CFG.count.map(function (c, i) {
+      return '<div class="drag"><span class="item-ico">' + posIcon(c.n) + '</span>' +
+        '<input type="text" data-c="' + i + '|n" value="' + h(c.n) + '">' +
+        '<input type="number" inputmode="decimal" data-c="' + i + '|price" value="' + (+c.price || 0) +
+        '" style="width:74px;text-align:right;font-size:14px" aria-label="цена за штуку">' +
+        '<span style="color:var(--muted-fg);font-size:13px">₽/шт</span>' +
+        '<button class="iconbtn mini" data-delc="' + i + '" style="color:var(--bad)" aria-label="убрать">' + I.trash + '</button></div>';
+    }).join('') + '</div>' +
+    '<button class="btn btn-ghost mini-btn" data-act="addc">' + I.plus + ' Добавить позицию подсчёта</button>' +
+    '<div class="hint">Что считаешь поштучно на вкладке «Подсчёт». Цену можно оставить нулём — тогда будут только штуки, без сумм.</div>' +
+
     '<div class="sec" style="margin-top:24px">Данные</div>' +
     '<button class="btn btn-ghost" data-act="restore" style="margin-bottom:10px">Загрузить резервную копию</button>' +
     '<button class="btn btn-ghost" data-act="wipe" style="color:var(--bad)">Стереть все отметки</button>' +
@@ -585,7 +728,7 @@ function tabbar() {
       '<span>' + label + '</span></button>';
   }
   return '<div class="tabbar">' + t('obj', I.home, 'Объект') + t('issues', I.msg, 'Замечания') +
-    t('export', I.file, 'Выгрузка') + t('settings', I.gear, 'Настройки') + '</div>';
+    t('count', I.calc, 'Подсчёт') + t('export', I.file, 'Выгрузка') + t('settings', I.gear, 'Настройки') + '</div>';
 }
 
 /* ============ события ============ */
@@ -614,8 +757,40 @@ function bind() {
   app.querySelectorAll('[data-filter]').forEach(function (el) {
     el.onclick = function () { VIEW.filter = el.dataset.filter; render(); };
   });
+  app.querySelectorAll('[data-expb]').forEach(function (el) {
+    el.onclick = function () { UI.expB = el.dataset.expb; save(); render(); };
+  });
   app.querySelectorAll('[data-pv]').forEach(function (el) {
     el.onclick = function () { VIEW.pv = el.dataset.pv; render(); };
+  });
+  app.querySelectorAll('[data-cflat]').forEach(function (el) {
+    el.onclick = function () { go('cflat', { flat: +el.dataset.cflat }); };
+  });
+  app.querySelectorAll('[data-cnav]').forEach(function (el) {
+    el.onclick = function () { if (el.dataset.cnav) go('cflat', { flat: +el.dataset.cnav }); };
+  });
+  app.querySelectorAll('[data-q]').forEach(function (el) {
+    el.onclick = function () {
+      var p = el.dataset.q.split('|'), r = rec(UI.b, VIEW.flat, true);
+      var v = qOf(r, p[0]) + (+p[1]);
+      if (v < 0) v = 0;
+      if (v) r.q[p[0]] = v; else delete r.q[p[0]];
+      r.ts = Date.now(); vibr(8); save(); render();
+    };
+  });
+  app.querySelectorAll('[data-c]').forEach(function (el) {
+    el.onchange = function () {
+      var p = el.dataset.c.split('|'), c = CFG.count[+p[0]];
+      if (p[1] === 'n') c.n = el.value; else c.price = Math.max(0, +el.value || 0);
+      save(); if (p[1] !== 'n') render();
+    };
+  });
+  app.querySelectorAll('[data-delc]').forEach(function (el) {
+    el.onclick = function () {
+      if (CFG.count.length <= 1) return;
+      if (!confirm('Убрать «' + CFG.count[+el.dataset.delc].n + '» из подсчёта? Посчитанные штуки останутся в базе.')) return;
+      CFG.count.splice(+el.dataset.delc, 1); save(); render();
+    };
   });
   app.querySelectorAll('[data-chip]').forEach(function (el) {
     el.onclick = function () {
@@ -760,6 +935,14 @@ function act(a, el) {
   var r;
   switch (a) {
     case 'back': go('obj'); break;
+    case 'backcount': go('count'); break;
+    case 'addc':
+      CFG.count.push({ id: 'c' + Date.now(), n: 'Новая позиция', price: 0 });
+      save(); render(); break;
+    case 'clearq':
+      if (!confirm('Обнулить подсчёт по кв. ' + VIEW.flat + '?')) return;
+      r = rec(UI.b, VIEW.flat, true); r.q = {}; r.ts = Date.now(); save(); render();
+      break;
     case 'settings': go('settings'); break;
     case 'pickb': pickBuilding(); break;
 
@@ -920,7 +1103,7 @@ function preparePhotos(ids) {
 /* ---------- Excel ---------- */
 function exportXlsx() {
   var ids = [];
-  CFG.buildings.forEach(function (b) {
+  expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     Object.keys(d).forEach(function (n) {
       (d[n].ph || []).forEach(function (id) { if (PH[id] && ids.indexOf(id) < 0) ids.push(id); });
@@ -933,7 +1116,7 @@ function exportXlsx() {
 
 function buildXlsx(IMG) {
   var C = window.colName;
-  var sheets = CFG.buildings.map(function (b) {
+  var sheets = expBuildings().map(function (b) {
     var d = DATA[b.id] || {};
     var cols = [], merges = [], rows = [];
     var nPos = CFG.positions.length, OFF = 3, total = OFF + nPos + 2;
@@ -1002,7 +1185,7 @@ function buildXlsx(IMG) {
   });
 
   /* ---- листы «В работу»: наряд электрикам, по одному на корпус ---- */
-  CFG.buildings.forEach(function (b) {
+  expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {}, rows = [], merges = [], rowNo = 3, any = false;
     rows.push([{ v: b.name.toUpperCase() + ' — ЧТО ДОДЕЛАТЬ', s: 6 }]);
     rows.push([{ v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: 'Что сделать', s: 1 }, { v: 'Готово', s: 1 }]);
@@ -1046,13 +1229,68 @@ function buildXlsx(IMG) {
     });
   });
 
+  /* ---- листы «Подсчёт»: сдельщина, штуки по квартирам ---- */
+  expBuildings().forEach(function (b) {
+    var d = DATA[b.id] || {}, rows = [], merges = [], any = false;
+    var withPrice = hasPrices(), nC = CFG.count.length;
+    var lastCol = 2 + nC + (withPrice ? 1 : 0);
+
+    rows.push([{ v: b.name.toUpperCase() + ' — ПОДСЧЁТ', s: 6 }]);
+    merges.push('A1:' + C(lastCol) + '1');
+    var hdr = [{ v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }];
+    CFG.count.forEach(function (c) { hdr.push({ v: c.n, s: 1 }); });
+    hdr.push({ v: 'Всего шт.', s: 1 });
+    if (withPrice) hdr.push({ v: 'Сумма, ₽', s: 1 });
+    rows.push(hdr);
+
+    var rowNo = 3, tot = {}, grand = 0, gmoney = 0;
+    floors(b).forEach(function (fl) {
+      var list = flatsOf(b, fl).filter(function (n) { return qTotal(d[n]); });
+      if (!list.length) return;
+      any = true;
+      var startRow = rowNo;
+      list.forEach(function (n, i) {
+        var r = d[n], row = [i === 0 ? { v: fl, s: 2, n: true } : { v: '', s: 2 }, { v: n, s: 2, n: true }];
+        CFG.count.forEach(function (c) {
+          var v = qOf(r, c.id);
+          tot[c.id] = (tot[c.id] || 0) + v;
+          row.push(v ? { v: v, s: 2, n: true } : { v: '', s: 2 });
+        });
+        var t = qTotal(r); grand += t;
+        row.push({ v: t, s: 2, n: true });
+        if (withPrice) { var m = qMoney(r); gmoney += m; row.push({ v: Math.round(m), s: 2, n: true }); }
+        rows.push(row); rowNo++;
+      });
+      if (list.length > 1) merges.push('A' + startRow + ':A' + (rowNo - 1));
+    });
+    if (!any) return;
+
+    var trow = [{ v: 'ИТОГО', s: 1 }, { v: '', s: 1 }];
+    CFG.count.forEach(function (c) { trow.push({ v: tot[c.id] || 0, s: 1, n: true }); });
+    trow.push({ v: grand, s: 1, n: true });
+    if (withPrice) trow.push({ v: Math.round(gmoney), s: 1, n: true });
+    rows.push(trow);
+    merges.push('A' + rowNo + ':B' + rowNo);
+
+    var cols = [{ w: 7 }, { w: 8 }];
+    CFG.count.forEach(function () { cols.push({ w: 13 }); });
+    cols.push({ w: 11 });
+    if (withPrice) cols.push({ w: 13 });
+
+    sheets.push({
+      name: ('Подсчёт — ' + b.name).slice(0, 31),
+      cols: cols, rows: rows, merges: merges, freeze: 2,
+      print: { titles: '$2:$2', center: true, foot: CFG.object + ' · ' + b.name + ' · подсчёт · ' + dateStamp() }
+    });
+  });
+
   /* лист замечаний — с настоящими фото, встроенными в ячейки */
   var PHCOL = 8, MAXPH = 3;          // с какой колонки идут фото и сколько их влезает
   var ir = [[{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: '№ на эт.', s: 1 },
   { v: 'Тип', s: 1 }, { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 }, { v: 'Примечание', s: 1 },
   { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]];
   var images = [], rowHeights = {}, big = [];
-  CFG.buildings.forEach(function (b) {
+  expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     allFlats(b).forEach(function (x, gi) {
       var r = d[x.n], s = status(r);
@@ -1075,7 +1313,7 @@ function buildXlsx(IMG) {
     });
   });
   /* на лист «Фото» идут все снимки — в том числе с квартир без замечаний */
-  CFG.buildings.forEach(function (b) {
+  expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     allFlats(b).forEach(function (x) {
       var r = d[x.n];
@@ -1122,7 +1360,7 @@ function buildXlsx(IMG) {
   }
 
   try {
-    download(window.XLS.workbook(sheets), 'Шахматка_' + CFG.object.replace(/\s+/g, '_') + '_' + dateStamp() + '.xlsx');
+    download(window.XLS.workbook(sheets), 'Шахматка_' + CFG.object.replace(/\s+/g, '_') + expSuffix() + '_' + dateStamp() + '.xlsx');
     toast('Шахматка выгружена');
   } catch (e) { alert('Не удалось собрать файл: ' + e.message); }
 }
@@ -1132,7 +1370,7 @@ function photoName(b, x, i) {
 
 function exportPhotos() {
   var files = [];
-  CFG.buildings.forEach(function (b) {
+  expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     allFlats(b).forEach(function (x) {
       var r = d[x.n]; if (!r || !r.ph || !r.ph.length) return;
@@ -1143,7 +1381,7 @@ function exportPhotos() {
     });
   });
   if (!files.length) { toast('Фото пока нет'); return; }
-  download(window.XLS.zip(files), 'Фото_' + dateStamp() + '.zip');
+  download(window.XLS.zip(files), 'Фото' + expSuffix() + '_' + dateStamp() + '.zip');
   toast(files.length + ' фото выгружено');
 }
 
@@ -1152,7 +1390,8 @@ function exportPhotos() {
 function sig(r) {
   if (!r) return '';
   var st = CFG.positions.map(function (p) { return p.id + ':' + (r.st[p.id] == null ? '-' : r.st[p.id]); }).join(',');
-  return st + '|' + (r.left || '') + '|' + (r.note || '') + '|' + (r.crit ? 1 : 0) + '|' + ((r.ph || []).length);
+  var q = CFG.count.map(function (c) { return c.id + ':' + qOf(r, c.id); }).join(',');
+  return st + '|' + q + '|' + (r.left || '') + '|' + (r.note || '') + '|' + (r.crit ? 1 : 0) + '|' + ((r.ph || []).length);
 }
 function summarize(r) {
   if (!r) return 'ничего не отмечено';
