@@ -330,6 +330,37 @@ function otherQ(r, crew) {
   return s;
 }
 /* итоги по корпусу или этажу в разрезе бригады */
+/* сколько записей journal попадёт под переназначение (или само переназначение) */
+function countReassign(ra, apply) {
+  var n = 0, from = ra.from || (CFG.crews[0] && CFG.crews[0].id), to = ra.to;
+  if (apply && (!to || to === from)) return 0;
+  CFG.buildings.forEach(function (b) {
+    if (ra.b && ra.b !== 'all' && ra.b !== b.id) return;
+    var d = DATA[b.id] || {};
+    Object.keys(d).forEach(function (k) {
+      var r = d[k];
+      if (!r) return;
+      /* записи из старых версий журнала не имеют — заводим его из количеств */
+      if (!r.lg || !r.lg.length) {
+        if (from !== '?' || !qTotal(r)) return;
+        if (!apply) { CFG.count.forEach(function (c) { if ((!ra.c || ra.c === 'all' || ra.c === c.id) && qOf(r, c.id)) n += qOf(r, c.id); }); return; }
+        r.lg = [];
+        CFG.count.forEach(function (c) {
+          var v = qOf(r, c.id);
+          if (v) r.lg.push({ c: c.id, d: v, t: r.ts || Date.now(), w: '?' });
+        });
+      }
+      r.lg.forEach(function (e) {
+        if (e.d <= 0) return;
+        if (ra.c && ra.c !== 'all' && ra.c !== e.c) return;
+        if ((e.w || '?') !== from) return;
+        n += e.d;
+        if (apply) e.w = to;
+      });
+    });
+  });
+  return n;
+}
 function qSumCrew(b, floorOnly, crew) {
   var d = DATA[b.id] || {}, per = {}, total = 0, other = 0, money2 = 0, flats = 0;
   var list = floorOnly == null ? allFlats(b) : flatsOf(b, floorOnly).map(function (n) { return { n: n }; });
@@ -761,8 +792,17 @@ function viewCountFlat() {
     right: '<button class="iconbtn" data-act="clearq">' + I.trash + '</button>'
   }) +
     '<div class="screen">' + body +
-    '<div class="hint">Крупная цифра — сколько всего в квартире. Серым подписано, что насчитала другая бригада: ' +
-    'плюс и минус всегда записываются на ту бригаду, что выбрана сейчас.</div>' +
+    '<label class="fld">Что переделать бригаде</label>' +
+    '<textarea id="fix" rows="2" maxlength="200" placeholder="Например: две рамки битые, розетка криво">' + h(r.fix || '') + '</textarea>' +
+    '<label class="fld">Фото косяка</label><div class="photos">' +
+    (r.fixph || []).map(function (id) {
+      return '<span class="photo-wrap"><img class="photo" data-ph="' + id + '" alt="Фото косяка">' +
+        '<button class="photo-del" data-delfix="' + id + '" aria-label="Удалить фото">' + I.x + '</button></span>';
+    }).join('') +
+    '<button class="photo-add" data-act="addfixph" aria-label="Добавить фото">' + I.cam + '</button></div>' +
+    '<div class="hint">Крупная цифра — сколько всего в квартире, серым подписано, что насчитала другая бригада. ' +
+    'Плюс и минус записываются на выбранную сейчас бригаду. «Что переделать» и фото уходят в наряд этой бригады ' +
+    'отдельно от замечаний приёмки.</div>' +
     '</div>' + navbar(prev, next, 'cflat');
 }
 
@@ -988,6 +1028,32 @@ function viewSettings() {
     '<button class="btn btn-ghost mini-btn" data-act="addw">' + I.plus + ' Добавить бригаду</button>' +
     '<div class="hint">Перед обходом выбери на вкладке «Подсчёт», кто работает. Тогда наряд можно будет выгрузить отдельно по каждой бригаде.</div>' +
 
+    /* ---- переназначение: кто на самом деле это делал ---- */
+    (function () {
+      var ra = UI.ra || {};
+      function sel(name, cur, opts) {
+        return '<select data-ra="' + name + '">' + opts.map(function (o) {
+          return '<option value="' + o.v + '"' + (String(cur) === String(o.v) ? ' selected' : '') + '>' + h(o.n) + '</option>';
+        }).join('') + '</select>';
+      }
+      var crewOpts = CFG.crews.map(function (w) { return { v: w.id, n: w.n }; });
+      var n = countReassign(ra);
+      return '<div class="sec" style="margin-top:26px">Переназначить подсчёт</div>' +
+        '<div class="card">' +
+        '<div class="row"><b>Корпус</b>' + sel('b', ra.b || 'all',
+          [{ v: 'all', n: 'все' }].concat(CFG.buildings.map(function (x) { return { v: x.id, n: x.name }; }))) + '</div>' +
+        '<div class="row"><b>Позиция</b>' + sel('c', ra.c || 'all',
+          [{ v: 'all', n: 'все' }].concat(CFG.count.map(function (x) { return { v: x.id, n: x.n }; }))) + '</div>' +
+        '<div class="row"><b>Записано на</b>' + sel('from', ra.from || (CFG.crews[0] && CFG.crews[0].id),
+          crewOpts.concat([{ v: '?', n: 'без бригады' }])) + '</div>' +
+        '<div class="row"><b>Отдать</b>' + sel('to', ra.to || (CFG.crews[0] && CFG.crews[0].id), crewOpts) + '</div>' +
+        '</div>' +
+        '<button class="btn btn-ghost mini-btn" data-act="doreassign"' + (n ? '' : ' disabled') + '>' +
+        I.user + (n ? ' Переназначить ' + n + ' шт.' : ' Нечего переназначать') + '</button>' +
+        '<div class="hint">Если работу записали не на ту бригаду — например, светильники ставили повременщики, ' +
+        'а в подсчёт они попали на тебя. Меняется только авторство, количество остаётся как есть.</div>';
+    })() +
+
     '<div class="sec" style="margin-top:24px">Данные</div>' +
     '<button class="btn btn-ghost" data-act="restore" style="margin-bottom:10px">Загрузить резервную копию</button>' +
     '<button class="btn btn-ghost" data-act="wipe" style="color:var(--bad)">Стереть все отметки</button>' +
@@ -1036,6 +1102,13 @@ function bind() {
   });
   app.querySelectorAll('[data-filter]').forEach(function (el) {
     el.onclick = function () { VIEW.filter = el.dataset.filter; render(); };
+  });
+  app.querySelectorAll('[data-ra]').forEach(function (el) {
+    el.onchange = function () {
+      UI.ra = UI.ra || {};
+      UI.ra[el.dataset.ra] = el.value;
+      save(); render();
+    };
   });
   app.querySelectorAll('[data-crew]').forEach(function (el) {
     el.onclick = function () { UI.crew = el.dataset.crew; vibr(6); save(); render(); };
@@ -1260,6 +1333,19 @@ function bind() {
     };
   });
 
+  app.querySelectorAll('[data-delfix]').forEach(function (el) {
+    el.onclick = function () {
+      var id = el.dataset.delfix, r = rec(UI.b, VIEW.flat, true);
+      r.fixph = (r.fixph || []).filter(function (x) { return x !== id; });
+      dropPhoto(id); save(); render();
+    };
+  });
+  var fix = document.getElementById('fix');
+  if (fix) fix.oninput = function () {
+    var r = rec(UI.b, VIEW.flat, true);
+    r.fix = fix.value; r.fixw = UI.crew; r.fixts = Date.now(); r.ts = Date.now(); save();
+  };
+
   var left = document.getElementById('left');
   if (left) left.oninput = function () {
     var r = rec(UI.b, VIEW.flat, true); r.left = left.value; r.ts = Date.now();
@@ -1288,6 +1374,14 @@ function act(a, el) {
     case 'addw':
       CFG.crews.push({ id: 'w' + Date.now(), n: 'Бригада ' + (CFG.crews.length + 1) });
       save(); render(); break;
+    case 'doreassign':
+      var ra = UI.ra || {};
+      var from = ra.from || (CFG.crews[0] && CFG.crews[0].id), to = ra.to || from;
+      if (from === to) { toast('Выбери разные бригады'); return; }
+      var cnt = countReassign(ra, true);
+      save(); render();
+      toast(cnt ? 'Переназначено ' + cnt + ' шт.' : 'Нечего переназначать');
+      break;
     case 'addcg':
       CFG.count.push({ id: 'c' + Date.now(), n: 'Новая позиция', price: 0, g: 'Новый раздел' });
       save(); render(); break;
@@ -1317,7 +1411,8 @@ function act(a, el) {
     case 'crit':
       r = rec(UI.b, VIEW.flat, true); r.crit = !r.crit; vibr(10); save(); render();
       break;
-    case 'addph': pickPhoto(); break;
+    case 'addph': pickPhoto('ph'); break;
+    case 'addfixph': pickPhoto('fixph'); break;
     case 'gonext': continueWalk(); break;
 
     case 'addb':
@@ -1357,7 +1452,7 @@ function continueWalk() {
 function pickBuilding() { UI.pick = !UI.pick; save(); render(); }
 
 /* ---------- фото ---------- */
-function pickPhoto() {
+function pickPhoto(field) {
   var inp = document.createElement('input');
   inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
   inp.onchange = function () {
@@ -1373,8 +1468,9 @@ function pickPhoto() {
         var id = 'ph' + Date.now() + Math.random().toString(36).slice(2, 7);
         cachePhoto(id, url);
         idb.put(id, url);
-        var r = rec(UI.b, VIEW.flat, true);
-        r.ph = r.ph || []; r.ph.push(id); r.ts = Date.now();
+        var r = rec(UI.b, VIEW.flat, true), key = field || 'ph';
+        r[key] = r[key] || []; r[key].push(id); r.ts = Date.now();
+        if (key === 'fixph') { r.fixw = UI.crew; r.fixts = Date.now(); }
         save(); render();
       };
       img.src = fr.result;
@@ -1731,7 +1827,7 @@ function exportNaryad() {
   var ids = [];
   sets.forEach(function (nd) {
     nd.rows.forEach(function (x) {
-      (x.r.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+      (x.r.fixph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
     });
   });
   if (ids.length) toast('Готовлю наряд…');
@@ -1812,36 +1908,39 @@ function buildNaryad(sets, IMG) {
     });
   });
 
-  /* замечания по квартирам всех этих нарядов */
+  /* лист «Что переделать»: то, что отмечено в подсчёте, со своими фото */
+  var MAXF = 3;
   var ir = [[{ v: 'Бригада', s: 1 }, { v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 },
-  { v: 'Замечание', s: 1 }, { v: 'Фото', s: 1 }]];
+  { v: 'Что переделать', s: 1 }, { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]];
   var images = [], rh = {}, seen = {};
   sets.forEach(function (nd) {
     nd.rows.forEach(function (x) {
       var key = x.b.id + '_' + x.n;
       if (seen[key]) return;
-      var r = x.r;
-      var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
-        .map(function (p) { return p.n; }).join(', ');
-      var txt = r.left || miss;
-      if (!txt && !(r.ph || []).length) return;
+      var r = x.r, ph = (r.fixph || []).slice(0, MAXF);
+      if (!r.fix && !ph.length) return;
       seen[key] = 1;
       var rowIdx = ir.length;
-      ir.push([{ v: nd.crew, s: 3 }, { v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
-      { v: txt + (r.note ? '\n' + r.note : ''), s: 3 }, { v: '', s: 2 }]);
-      var id = (r.ph || [])[0], im = id && IMG[id];
-      if (im && im.full) {
-        images.push({ col: 5, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, 0) });
-        rh[rowIdx] = window.XLS.rowHeightPx(im.fh + 8);
-      }
+      var row = [{ v: nd.crew, s: 3 }, { v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true },
+      { v: x.n, s: 2, n: true }, { v: r.fix || '', s: 3 }];
+      for (var c = 0; c < MAXF; c++) row.push({ v: '', s: 2 });
+      ir.push(row);
+      ph.forEach(function (id, k) {
+        var im = IMG[id];
+        if (!im || !im.full) return;
+        images.push({ col: 5 + k, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh,
+          name: photoName(x.b, x, k) });
+        rh[rowIdx] = Math.max(rh[rowIdx] || 0, window.XLS.rowHeightPx(im.fh + 8));
+      });
     });
   });
   if (ir.length > 1) {
+    var pw = window.XLS.colWidthPx(BIG_W + 10);
     sheets.push({
-      name: 'Замечания обхода',
-      cols: [{ w: 15 }, { w: 13 }, { w: 7 }, { w: 8 }, { w: 42 }, { w: window.XLS.colWidthPx(BIG_W + 10) }],
+      name: 'Что переделать',
+      cols: [{ w: 15 }, { w: 13 }, { w: 7 }, { w: 8 }, { w: 40 }, { w: pw }, { w: pw }, { w: pw }],
       rows: ir, merges: [], rowHeights: rh, images: images, freeze: 1,
-      print: { titles: '$1:$1', foot: CFG.object + ' · замечания обхода' }
+      print: { landscape: true, titles: '$1:$1', foot: CFG.object + ' · что переделать' }
     });
   }
 
