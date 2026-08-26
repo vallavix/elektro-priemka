@@ -151,7 +151,82 @@ var idb = (function () {
     }
   };
 })();
-var PH = {}; // кэш фото в памяти: id -> dataURL
+/* Фото в памяти держим только те, что сейчас на экране: при паре сотен снимков
+   всё разом — это десятки мегабайт, и телефон перестаёт откликаться. */
+var PH = {}, PHQ = [], PH_MAX = 24;
+function cachePhoto(id, url) {
+  if (!PH[id]) PHQ.push(id);
+  PH[id] = url;
+  while (PHQ.length > PH_MAX) {
+    var k = PHQ.shift();
+    if (k !== id) delete PH[k];
+  }
+}
+function getPhoto(id) {
+  if (PH[id]) return Promise.resolve(PH[id]);
+  return idb.get(id).then(function (url) {
+    if (url) cachePhoto(id, url);
+    return url;
+  }).catch(function () { return null; });
+}
+function dropPhoto(id) {
+  [id, 't_' + id].forEach(function (k) {
+    delete PH[k];
+    var i = PHQ.indexOf(k);
+    if (i >= 0) PHQ.splice(i, 1);
+    idb.del(k);
+  });
+}
+/* Для списков держим отдельное маленькое превью: полноразмерный снимок в
+   развёрнутом виде занимает мегабайты, а на экране он размером с ноготь.
+   Превью считается один раз и лежит рядом в базе. */
+var THUMB_PX = 240;
+function getThumb(id) {
+  var key = 't_' + id;
+  if (PH[key]) return Promise.resolve(PH[key]);
+  return idb.get(key).then(function (u) {
+    if (u) { cachePhoto(key, u); return u; }
+    return idb.get(id).then(function (full) {
+      if (!full) return null;
+      return loadImg(full).then(function (img) {
+        var f = fit(img.width, img.height, THUMB_PX, THUMB_PX);
+        var cv = document.createElement('canvas');
+        cv.width = f.w; cv.height = f.h;
+        cv.getContext('2d').drawImage(img, 0, 0, f.w, f.h);
+        var url = cv.toDataURL('image/jpeg', 0.7);
+        idb.put(key, url);
+        cachePhoto(key, url);
+        return url;
+      });
+    });
+  }).catch(function () { return null; });
+}
+
+/* Картинки подставляем только когда они реально видны, и убираем при уходе
+   за экран — иначе двести миниатюр разом съедают всю память телефона. */
+var phObserver = null;
+function hydratePhotos() {
+  var imgs = app.querySelectorAll('img[data-ph]');
+  if (!imgs.length) return;
+  if (!('IntersectionObserver' in window)) {
+    imgs.forEach(function (img) { getThumb(img.dataset.ph).then(function (u) { if (u) img.src = u; }); });
+    return;
+  }
+  if (phObserver) phObserver.disconnect();
+  phObserver = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      var img = e.target;
+      if (e.isIntersecting) {
+        if (!img.getAttribute('src')) {
+          getThumb(img.dataset.ph).then(function (u) { if (u) img.src = u; });
+        }
+      } else if (img.getAttribute('src')) {
+        img.removeAttribute('src');
+      }
+    });
+  }, { root: null, rootMargin: '300px 0px' });
+  imgs.forEach(function (img) { phObserver.observe(img); });
+}
 
 /* ============ вспомогательное ============ */
 function bld(id) { return CFG.buildings.filter(function (b) { return b.id === (id || UI.b); })[0] || CFG.buildings[0]; }
@@ -337,6 +412,7 @@ function render() {
   var f = { obj: viewObject, flat: viewFlat, issues: viewIssues, export: viewExport, settings: viewSettings, mergeview: viewMerge, count: viewCount, cflat: viewCountFlat }[VIEW.name];
   app.innerHTML = f();
   bind();
+  hydratePhotos();
 }
 
 /* ---------- экран «Объект» ---------- */
@@ -513,7 +589,7 @@ function togglePhrase(cur, phrase) {
 
 function photosHtml(r) {
   return (r.ph || []).map(function (id) {
-    return '<span class="photo-wrap"><img class="photo" src="' + (PH[id] || '') + '" alt="Фото замечания">' +
+    return '<span class="photo-wrap"><img class="photo" data-ph="' + id + '" alt="Фото замечания">' +
       '<button class="photo-del" data-delph="' + id + '" aria-label="Удалить фото">' + I.x + '</button></span>';
   }).join('') +
     '<button class="photo-add" data-act="addph" aria-label="Добавить фото">' + I.cam + '</button>';
@@ -632,7 +708,7 @@ function viewIssues() {
         '<p>' + h(txt) + '</p>' +
         (x.missing.length ? '<div class="tm">Не сделано: ' + h(x.missing.join(', ')) + '</div>' : '') +
         '<div class="tm">' + timeStr(x.r.ts) + '</div></span>' +
-        ((x.r.ph || []).length ? '<img src="' + (PH[x.r.ph[0]] || '') + '" alt="Фото">' : '') +
+        ((x.r.ph || []).length ? '<img data-ph="' + x.r.ph[0] + '" alt="Фото">' : '') +
         '</button>';
     });
 
@@ -949,7 +1025,7 @@ function bind() {
     el.onclick = function () {
       var id = el.dataset.delph, r = rec(UI.b, VIEW.flat, true);
       r.ph = r.ph.filter(function (x) { return x !== id; });
-      idb.del(id); delete PH[id]; save(); render();
+      dropPhoto(id); save(); render();
     };
   });
   app.querySelectorAll('[data-b]').forEach(function (el) {
@@ -1144,7 +1220,7 @@ function pickPhoto() {
         cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
         var url = cv.toDataURL('image/jpeg', 0.72);
         var id = 'ph' + Date.now() + Math.random().toString(36).slice(2, 7);
-        PH[id] = url;
+        cachePhoto(id, url);
         idb.put(id, url);
         var r = rec(UI.b, VIEW.flat, true);
         r.ph = r.ph || []; r.ph.push(id); r.ts = Date.now();
@@ -1209,9 +1285,10 @@ function preparePhotos(ids) {
   var out = {}, i = 0;
   function step() {
     if (i >= ids.length) return Promise.resolve(out);
-    var id = ids[i++], url = PH[id];
-    if (!url) return step();
-    return loadImg(url).then(function (img) {
+    var id = ids[i++];
+    return getPhoto(id).then(function (url) {
+      if (!url) return step();
+      return loadImg(url).then(function (img) {
       var big = fit(img.width, img.height, BIG_W, BIG_H);
       var t = fit(img.width, img.height, THUMB_BOX, THUMB_BOX);
       out[id] = {
@@ -1220,7 +1297,8 @@ function preparePhotos(ids) {
         /* миниатюра рисуется с двойным запасом, чтобы на печати не мылила */
         thumb: reencode(img, { w: t.w * 2, h: t.h * 2 }, 0.62), tw: t.w, th: t.h
       };
-      return step();
+        return step();
+      });
     }).catch(function () { return step(); });
   }
   return step();
@@ -1232,7 +1310,7 @@ function exportXlsx() {
   expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     Object.keys(d).forEach(function (n) {
-      (d[n].ph || []).forEach(function (id) { if (PH[id] && ids.indexOf(id) < 0) ids.push(id); });
+      (d[n].ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
     });
   });
   if (ids.length) toast('Готовлю снимки…');
@@ -1496,7 +1574,7 @@ function exportNaryad() {
   if (!nd.grand) { toast('За этот период ничего не отмечено'); return; }
   var ids = [];
   nd.rows.forEach(function (x) {
-    (x.r.ph || []).forEach(function (id) { if (PH[id] && ids.indexOf(id) < 0) ids.push(id); });
+    (x.r.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
   });
   if (ids.length) toast('Готовлю наряд…');
   preparePhotos(ids).then(function (IMG) { buildNaryad(nd, IMG); })
@@ -1587,20 +1665,32 @@ function photoName(b, x, i) {
 }
 
 function exportPhotos() {
-  var files = [];
+  var want = [];
   expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     allFlats(b).forEach(function (x) {
       var r = d[x.n]; if (!r || !r.ph || !r.ph.length) return;
-      r.ph.forEach(function (id, i) {
-        var u8 = dataUrlToBytes(PH[id]);
-        if (u8) files.push({ name: photoName(b, x, i), data: u8 });
-      });
+      r.ph.forEach(function (id, i) { want.push({ id: id, name: photoName(b, x, i) }); });
     });
   });
-  if (!files.length) { toast('Фото пока нет'); return; }
-  download(window.XLS.zip(files), 'Фото' + expSuffix() + '_' + dateStamp() + '.zip');
-  toast(files.length + ' фото выгружено');
+  if (!want.length) { toast('Фото пока нет'); return; }
+  toast('Собираю ' + want.length + ' фото…');
+  var files = [], i = 0;
+  function step() {
+    if (i >= want.length) {
+      if (!files.length) { toast('Фото пока нет'); return; }
+      download(window.XLS.zip(files), 'Фото' + expSuffix() + '_' + dateStamp() + '.zip');
+      toast(files.length + ' фото выгружено');
+      return;
+    }
+    var w = want[i++];
+    return getPhoto(w.id).then(function (url) {
+      var u8 = url && dataUrlToBytes(url);
+      if (u8) files.push({ name: w.name, data: u8 });
+      return step();
+    });
+  }
+  step();
 }
 
 /* ================= обмен с напарником ================= */
@@ -1634,15 +1724,38 @@ function shareExport() {
     if (nm === null) return;
     CFG.me = nm.trim() || 'Прораб'; save();
   }
-  var used = {};
+  var ids = [];
   CFG.buildings.forEach(function (b) {
     var d = DATA[b.id] || {};
-    Object.keys(d).forEach(function (n) { (d[n].ph || []).forEach(function (id) { if (PH[id]) used[id] = PH[id]; }); });
+    Object.keys(d).forEach(function (n) {
+      (d[n].ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+    });
   });
-  var blob = new Blob([JSON.stringify({ v: 1, from: CFG.me, at: Date.now(), cfg: CFG, data: DATA, ph: used })],
-    { type: 'application/json' });
-  download(blob, 'Обход_' + CFG.me.replace(/\s+/g, '_') + '_' + dateStamp() + '.json');
-  toast('Файл готов — отправь напарнику');
+  toast('Собираю файл…');
+  jsonWithPhotos({ v: 1, from: CFG.me, at: Date.now(), cfg: CFG, data: DATA }, ids).then(function (blob) {
+    download(blob, 'Обход_' + CFG.me.replace(/\s+/g, '_') + '_' + dateStamp() + '.json');
+    toast('Файл готов — отправь напарнику');
+  });
+}
+
+/* Копию собираем по кускам: склеивать 60+ МБ в одну строку телефон не тянет. */
+function jsonWithPhotos(head, ids) {
+  var parts = [JSON.stringify(head).slice(0, -1) + ',"ph":{'], i = 0, first = true;
+  function step() {
+    if (i >= ids.length) {
+      parts.push('}}');
+      return Promise.resolve(new Blob(parts, { type: 'application/json' }));
+    }
+    var id = ids[i++];
+    return idb.get(id).then(function (url) {
+      if (url) {
+        parts.push((first ? '' : ',') + JSON.stringify(id) + ':' + JSON.stringify(url));
+        first = false;
+      }
+      return step();
+    }).catch(function () { return step(); });
+  }
+  return step();
 }
 
 var PENDING = null;
@@ -1697,9 +1810,8 @@ function buildMerge(o) {
 function applyMerge() {
   var P = PENDING; if (!P) return;
   /* фото напарника кладём к себе */
-  Object.keys(P.src.ph || {}).forEach(function (id) {
-    if (!PH[id]) { PH[id] = P.src.ph[id]; idb.put(id, P.src.ph[id]); }
-  });
+  var incoming = P.src.ph || {};
+  Object.keys(incoming).forEach(function (id) { idb.put(id, incoming[id]); });
   /* корпуса, которых у меня нет */
   P.newBuildings.forEach(function (nb) {
     if (!CFG.buildings.some(function (b) { return b.id === nb.id; })) CFG.buildings.push(nb);
@@ -1754,9 +1866,18 @@ function viewMerge() {
 }
 
 function backup() {
-  var blob = new Blob([JSON.stringify({ cfg: CFG, data: DATA, ph: PH }, null, 0)], { type: 'application/json' });
-  download(blob, 'Шахматка_копия_' + dateStamp() + '.json');
-  toast('Копия сохранена');
+  var ids = [];
+  CFG.buildings.forEach(function (b) {
+    var d = DATA[b.id] || {};
+    Object.keys(d).forEach(function (n) {
+      (d[n].ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+    });
+  });
+  toast('Собираю копию…');
+  jsonWithPhotos({ cfg: CFG, data: DATA }, ids).then(function (blob) {
+    download(blob, 'Шахматка_копия_' + dateStamp() + '.json');
+    toast('Копия сохранена');
+  });
 }
 function restore() {
   var inp = document.createElement('input');
@@ -1769,10 +1890,20 @@ function restore() {
         var o = JSON.parse(fr.result);
         if (!o.cfg || !o.data) throw new Error('не тот файл');
         if (!confirm('Заменить текущие данные данными из копии?')) return;
-        CFG = o.cfg; DATA = o.data; PH = o.ph || {};
-        Object.keys(PH).forEach(function (k) { idb.put(k, PH[k]); });
-        UI.b = CFG.buildings[0].id; UI.floor = CFG.buildings[0].from;
-        save(); toast('Данные восстановлены'); go('obj');
+        CFG = o.cfg; DATA = o.data;
+        PH = {}; PHQ = [];
+        var ph = o.ph || {}, keys = Object.keys(ph), k = 0;
+        toast('Переношу ' + keys.length + ' фото…');
+        (function put() {
+          if (k >= keys.length) {
+            o = null; ph = null;
+            UI.b = CFG.buildings[0].id; UI.floor = CFG.buildings[0].from;
+            save(); toast('Данные восстановлены'); go('obj');
+            return;
+          }
+          var id = keys[k++];
+          idb.put(id, ph[id]).then(put).catch(put);
+        })();
       } catch (e) { alert('Файл не подошёл: ' + e.message); }
     };
     fr.readAsText(f);
@@ -1784,7 +1915,6 @@ function restore() {
 window.addEventListener('DOMContentLoaded', function () {
   app = document.getElementById('app');
   load();
-  idb.all().then(function (o) { PH = o; render(); }).catch(function () { render(); });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () { });
   go(UI.tab === 'flat' ? 'obj' : UI.tab);
 });
