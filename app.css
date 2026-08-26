@@ -152,6 +152,9 @@ svg{display:block;flex:0 0 auto}
   background:var(--na-bg);color:var(--muted-fg)
 }
 .qbadge.on{background:var(--ok);color:#fff}
+.qbadge.alien{background:var(--na);color:#fff;opacity:.45}
+.s-alien{border-color:var(--border);opacity:.62}
+.qname i.alien{color:var(--na);font-weight:600}
 .qrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
 .qchip{
   display:inline-flex;align-items:baseline;gap:5px;padding:5px 10px;border-radius:99px;

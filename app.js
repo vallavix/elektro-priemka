@@ -89,11 +89,18 @@ var DEFAULT_CFG = {
 
 /* ============ хранилище ============ */
 var CFG, DATA, UI;
-function load() {
-  try { CFG = JSON.parse(localStorage.getItem('shm_cfg')) || null; } catch (e) { CFG = null; }
-  if (!CFG || !CFG.buildings) CFG = JSON.parse(JSON.stringify(DEFAULT_CFG));
+/* Старая копия может не знать про подсчёт и бригады — дополняем, иначе экраны,
+   которые на них опираются, просто не открываются. */
+function ensureCfg() {
+  if (!CFG || !CFG.buildings || !CFG.buildings.length) CFG = JSON.parse(JSON.stringify(DEFAULT_CFG));
+  if (!CFG.positions || !CFG.positions.length) CFG.positions = JSON.parse(JSON.stringify(DEFAULT_CFG.positions));
   if (!CFG.count || !CFG.count.length) CFG.count = JSON.parse(JSON.stringify(DEFAULT_COUNT));
   if (!CFG.crews || !CFG.crews.length) CFG.crews = JSON.parse(JSON.stringify(DEFAULT_CREWS));
+  if (!CFG.object) CFG.object = DEFAULT_CFG.object;
+}
+function load() {
+  try { CFG = JSON.parse(localStorage.getItem('shm_cfg')) || null; } catch (e) { CFG = null; }
+  ensureCfg();
   try { DATA = JSON.parse(localStorage.getItem('shm_data')) || {}; } catch (e) { DATA = {}; }
   try { UI = JSON.parse(localStorage.getItem('shm_ui')) || {}; } catch (e) { UI = {}; }
   if (!UI.b) UI.b = CFG.buildings[0].id;
@@ -290,6 +297,57 @@ function qMoney(r) {
 }
 function hasPrices() {
   return CFG.count.some(function (c) { return +c.price > 0; });
+}
+/* Кто сколько сделал в этой квартире — из журнала нажатий.
+   Если журнала нет (записи из старых версий), всё уходит в «без бригады». */
+function byCrew(r) {
+  var out = {};
+  if (!r) return out;
+  if (r.lg && r.lg.length) {
+    r.lg.forEach(function (e) {
+      if (e.d <= 0) return;
+      var w = e.w || '?';
+      out[w] = out[w] || { per: {}, total: 0 };
+      out[w].per[e.c] = (out[w].per[e.c] || 0) + e.d;
+      out[w].total += e.d;
+    });
+    return out;
+  }
+  var t = qTotal(r);
+  if (t) {
+    out['?'] = { per: {}, total: t };
+    CFG.count.forEach(function (c) { if (qOf(r, c.id)) out['?'].per[c.id] = qOf(r, c.id); });
+  }
+  return out;
+}
+function crewQ(r, crew) {
+  var bc = byCrew(r);
+  return (bc[crew] && bc[crew].total) || 0;
+}
+function otherQ(r, crew) {
+  var bc = byCrew(r), s = 0;
+  Object.keys(bc).forEach(function (w) { if (w !== crew) s += bc[w].total; });
+  return s;
+}
+/* итоги по корпусу или этажу в разрезе бригады */
+function qSumCrew(b, floorOnly, crew) {
+  var d = DATA[b.id] || {}, per = {}, total = 0, other = 0, money2 = 0, flats = 0;
+  var list = floorOnly == null ? allFlats(b) : flatsOf(b, floorOnly).map(function (n) { return { n: n }; });
+  list.forEach(function (x) {
+    var r = d[x.n];
+    if (!r) return;
+    var bc = byCrew(r), mine = bc[crew];
+    Object.keys(bc).forEach(function (w) { if (w !== crew) other += bc[w].total; });
+    if (!mine) return;
+    flats++;
+    total += mine.total;
+    CFG.count.forEach(function (c) {
+      var v = mine.per[c.id] || 0;
+      per[c.id] = (per[c.id] || 0) + v;
+      money2 += v * (+c.price || 0);
+    });
+  });
+  return { per: per, total: total, other: other, money: money2, flats: flats };
 }
 function qSum(b, floorOnly) {
   var d = DATA[b.id] || {}, per = {}, total = 0, money = 0, flats = 0;
@@ -606,38 +664,45 @@ function navbar(prev, next, kind) {
 
 /* ---------- режим подсчёта: объект ---------- */
 function viewCount() {
-  var b = bld(), d = DATA[b.id] || {};
-  var all = qSum(b), fl = qSum(b, UI.floor);
+  var b = bld(), d = DATA[b.id] || {}, crew = UI.crew;
+  var all = qSumCrew(b, null, crew), fl = qSumCrew(b, UI.floor, crew);
 
   var floorsHtml = floors(b).map(function (f) {
-    var s = qSum(b, f);
+    var s = qSumCrew(b, f, crew);
     return '<button class="floor ' + (f === UI.floor ? 'on' : '') + (s.total ? ' done' : '') +
-      '" data-floor="' + f + '">' + f + '<u>' + (s.total || '—') + '</u></button>';
+      '" data-floor="' + f + '">' + f + '<u>' + (s.total || (s.other ? '·' + s.other : '—')) + '</u></button>';
   }).join('');
 
   var flatsHtml = flatsOf(b, UI.floor).map(function (num, idx) {
-    var t = qTotal(d[num]);
-    return '<button class="flat ' + (t ? 's-ok' : 's-new') + '" data-cflat="' + num + '"><b>' + num + '</b>' +
-      '<em>№' + (idx + 1) + '</em><span class="qbadge' + (t ? ' on' : '') + '">' + (t || '·') + '</span></button>';
+    var r = d[num], mine = crewQ(r, crew), other = otherQ(r, crew);
+    var badge = mine
+      ? '<span class="qbadge on">' + mine + '</span>'
+      : other ? '<span class="qbadge alien">' + other + '</span>'
+        : '<span class="qbadge">·</span>';
+    return '<button class="flat ' + (mine ? 's-ok' : other ? 's-alien' : 's-new') + '" data-cflat="' + num + '">' +
+      '<b>' + num + '</b><em>№' + (idx + 1) + '</em>' + badge + '</button>';
   }).join('');
 
   var crews = CFG.crews.length > 1 || CFG.crews[0].n !== DEFAULT_CREWS[0].n
     ? '<div class="sec">Кто работает</div><div class="tabs">' + CFG.crews.map(function (w) {
-      return '<button class="tab ' + (UI.crew === w.id ? 'on' : '') + '" data-crew="' + w.id + '">' +
+      return '<button class="tab ' + (crew === w.id ? 'on' : '') + '" data-crew="' + w.id + '">' +
         I.user + h(w.n) + '</button>';
     }).join('') + '</div>' : '';
 
   return topbar({
     left: '<button class="iconbtn" data-act="pickb">' + I.dots + '</button>',
-    title: 'Подсчёт', sub: h(b.name) + ' · ' + h(crewName(UI.crew)),
+    title: 'Подсчёт', sub: h(b.name) + ' · ' + h(crewName(crew)),
     right: '<button class="iconbtn" data-act="settings">' + I.gear + '</button>'
   }) +
     '<div class="screen">' + crews +
     '<div class="card prog"><div class="prog-top"><div>' +
-    '<div class="prog-lbl">Всего по корпусу</div><div class="prog-num">' + all.total + ' <span style="font-size:18px;font-weight:600">шт.</span></div></div>' +
+    '<div class="prog-lbl">Сделала ' + h(crewName(crew)) + '</div>' +
+    '<div class="prog-num">' + all.total + ' <span style="font-size:18px;font-weight:600">шт.</span></div></div>' +
     '<div style="text-align:right">' +
     (hasPrices() ? '<div style="font-size:19px;font-weight:700;color:var(--ok)">' + money(all.money) + '</div>' : '') +
-    '<div class="prog-cnt">посчитано квартир: ' + all.flats + '</div></div></div>' +
+    '<div class="prog-cnt">квартир: ' + all.flats +
+    (all.other ? '<br><span style="color:var(--na)">другие бригады: ' + all.other + ' шт.</span>' : '') +
+    '</div></div></div>' +
     '<div class="qrow">' + CFG.count.map(function (c) {
       return '<span class="qchip"><b>' + (all.per[c.id] || 0) + '</b>' + h(c.n) + '</span>';
     }).join('') + '</div></div>' +
@@ -645,38 +710,59 @@ function viewCount() {
     '<div class="sec">Этажи · на этаже ' + fl.total + ' шт.</div>' +
     '<div class="floors" id="floors">' + floorsHtml + '</div>' +
     '<div class="flats">' + flatsHtml + '</div>' +
-    '<div class="hint">Цифра в кружке — сколько всего посчитано в квартире. Цены за штуку задаются в Настройках, тогда сразу считается и сумма.</div>' +
+    '<div class="legend">' +
+    '<span><i style="background:var(--ok)"></i>Считала ' + h(crewName(crew)) + '</span>' +
+    '<span><i style="background:var(--na)"></i>Другая бригада</span>' +
+    '<span><i style="border:2px solid var(--border)"></i>Пусто</span>' +
+    '</div>' +
     '</div>' + tabbar();
 }
 
 /* ---------- режим подсчёта: квартира ---------- */
 function viewCountFlat() {
-  var b = bld(), num = VIEW.flat, r = rec(b.id, num, true);
+  var b = bld(), num = VIEW.flat, r = rec(b.id, num, true), crew = UI.crew;
   var list = seq(), i = list.findIndex(function (x) { return x.n === num; });
   var prev = i > 0 ? list[i - 1] : null, next = i < list.length - 1 ? list[i + 1] : null;
+  var bc = byCrew(r);
 
-  var rows = CFG.count.map(function (c) {
-    var v = qOf(r, c.id);
-    return '<div class="qitem"><span class="item-ico">' + posIcon(c.n) + '</span>' +
-      '<span class="qname">' + h(c.n) +
-      (+c.price > 0 ? '<i>' + money(v * (+c.price)) + '</i>' : '') + '</span>' +
-      '<span class="qctl">' +
-      '<button class="qbtn" data-q="' + c.id + '|-1"' + (v ? '' : ' disabled') + ' aria-label="минус">' + I.minus + '</button>' +
-      '<b class="qval' + (v ? ' on' : '') + '">' + v + '</b>' +
-      '<button class="qbtn plus" data-q="' + c.id + '|1" aria-label="плюс">' + I.plus + '</button>' +
-      '</span></div>';
+  /* позиции подсчёта разбиты на разделы так же, как в приёмке */
+  var runs = [];
+  CFG.count.forEach(function (c) {
+    var g = c.g || '', last = runs[runs.length - 1];
+    if (!last || last.g !== g) runs.push({ g: g, items: [] });
+    runs[runs.length - 1].items.push(c);
+  });
+
+  var body = runs.map(function (run) {
+    return '<div class="grp">' + h(run.g || 'Квартира') + '</div><div class="items">' +
+      run.items.map(function (c) {
+        var v = qOf(r, c.id);
+        var mine = (bc[crew] && bc[crew].per[c.id]) || 0;
+        var others = Object.keys(bc).filter(function (w) { return w !== crew && bc[w].per[c.id]; })
+          .map(function (w) { return (w === '?' ? 'раньше' : crewName(w)) + ' ' + bc[w].per[c.id]; }).join(', ');
+        return '<div class="qitem"><span class="item-ico">' + posIcon(c.n) + '</span>' +
+          '<span class="qname">' + h(c.n) +
+          (others ? '<i class="alien">' + h(others) + '</i>' : '') +
+          (+c.price > 0 && mine ? '<i>' + money(mine * (+c.price)) + '</i>' : '') + '</span>' +
+          '<span class="qctl">' +
+          '<button class="qbtn" data-q="' + c.id + '|-1"' + (v ? '' : ' disabled') + ' aria-label="минус">' + I.minus + '</button>' +
+          '<b class="qval' + (v ? ' on' : '') + '">' + v + '</b>' +
+          '<button class="qbtn plus" data-q="' + c.id + '|1" aria-label="плюс">' + I.plus + '</button>' +
+          '</span></div>';
+      }).join('') + '</div>';
   }).join('');
 
-  var t = qTotal(r);
+  var mineTotal = crewQ(r, crew), other = otherQ(r, crew);
   return topbar({
     left: '<button class="iconbtn" data-act="backcount">' + I.left + '</button>',
     title: 'Кв. ' + num + ' · подсчёт',
-    sub: 'Этаж ' + list[i].f + ' · всего ' + t + ' шт.' + (hasPrices() ? ' · ' + money(qMoney(r)) : ''),
+    sub: 'Этаж ' + list[i].f + ' · ' + h(crewName(crew)) + ': ' + mineTotal + ' шт.' +
+      (other ? ' · чужих ' + other : ''),
     right: '<button class="iconbtn" data-act="clearq">' + I.trash + '</button>'
   }) +
-    '<div class="screen"><div class="items">' + rows + '</div>' +
-    '<div class="hint">Считается отдельно от приёмки: галочки и замечания эти цифры не трогают. ' +
-    'Всё лежит в одной базе, попадает в резервную копию и в обмен с напарником.</div>' +
+    '<div class="screen">' + body +
+    '<div class="hint">Крупная цифра — сколько всего в квартире. Серым подписано, что насчитала другая бригада: ' +
+    'плюс и минус всегда записываются на ту бригаду, что выбрана сейчас.</div>' +
     '</div>' + navbar(prev, next, 'cflat');
 }
 
@@ -862,16 +948,35 @@ function viewSettings() {
     'Порядок разделов и позиций внутри — такой же, как будет в шахматке. ' +
     'У первого раздела название можно не писать, тогда колонки идут в Excel по отдельности.</div>' +
     '<div class="sec" style="margin-top:26px">Подсчёт на сдельщине</div>' +
-    '<div class="card">' + CFG.count.map(function (c, i) {
-      return '<div class="drag"><span class="item-ico">' + posIcon(c.n) + '</span>' +
-        '<input type="text" data-c="' + i + '|n" value="' + h(c.n) + '">' +
-        '<input type="number" inputmode="decimal" data-c="' + i + '|price" value="' + (+c.price || 0) +
-        '" style="width:74px;text-align:right;font-size:14px" aria-label="цена за штуку">' +
-        '<span style="color:var(--muted-fg);font-size:13px">₽/шт</span>' +
-        '<button class="iconbtn mini" data-delc="' + i + '" style="color:var(--bad)" aria-label="убрать">' + I.trash + '</button></div>';
-    }).join('') + '</div>' +
-    '<button class="btn btn-ghost mini-btn" data-act="addc">' + I.plus + ' Добавить позицию подсчёта</button>' +
-    '<div class="hint">Что считаешь поштучно на вкладке «Подсчёт». Цену можно оставить нулём — тогда будут только штуки, без сумм.</div>' +
+    (function () {
+      var runs = [];
+      CFG.count.forEach(function (c, i) {
+        var g = c.g || '', last = runs[runs.length - 1];
+        if (!last || last.g !== g) runs.push({ g: g, items: [] });
+        runs[runs.length - 1].items.push({ c: c, i: i });
+      });
+      return runs.map(function (run, ri) {
+        var rows = run.items.map(function (it, k) {
+          return '<div class="drag"><span class="item-ico">' + posIcon(it.c.n) + '</span>' +
+            '<input type="text" data-c="' + it.i + '|n" value="' + h(it.c.n) + '">' +
+            '<input type="number" inputmode="decimal" data-c="' + it.i + '|price" value="' + (+it.c.price || 0) +
+            '" style="width:66px;text-align:right;font-size:14px" aria-label="цена за штуку">' +
+            '<span style="color:var(--muted-fg);font-size:12px">₽</span>' +
+            '<button class="iconbtn mini" data-cmove="' + it.i + '|-1"' + (k === 0 ? ' disabled' : '') + ' aria-label="выше">' + I.up + '</button>' +
+            '<button class="iconbtn mini" data-cmove="' + it.i + '|1"' + (k === run.items.length - 1 ? ' disabled' : '') + ' aria-label="ниже">' + I.down + '</button>' +
+            '<button class="iconbtn mini" data-delc="' + it.i + '" style="color:var(--bad)" aria-label="убрать">' + I.trash + '</button></div>';
+        }).join('');
+        return '<div class="grpbox">' +
+          '<div class="grphead"><input type="text" data-cgrp="' + ri + '" value="' + h(run.g) + '" placeholder="Квартира">' +
+          (runs.length > 1 ? '<button class="iconbtn mini" data-delcg="' + ri + '" style="color:var(--bad)" aria-label="удалить раздел">' + I.trash + '</button>' : '') +
+          '</div><div class="card">' + rows + '</div>' +
+          '<button class="btn btn-ghost mini-btn" data-addcp="' + ri + '">' + I.plus + ' Позиция в этот раздел</button>' +
+          '</div>';
+      }).join('');
+    })() +
+    '<button class="btn btn-ghost mini-btn" data-act="addcg">' + I.plus + ' Добавить раздел подсчёта</button>' +
+    '<div class="hint">Разделы здесь такие же, как в приёмке: «Квартира», «Санузел». Цену можно оставить нулём — тогда будут только штуки, без сумм.</div>' +
+
 
     '<div class="sec" style="margin-top:26px">Бригады</div>' +
     '<div class="card">' + CFG.crews.map(function (w, i) {
@@ -981,6 +1086,52 @@ function bind() {
       var p = el.dataset.c.split('|'), c = CFG.count[+p[0]];
       if (p[1] === 'n') c.n = el.value; else c.price = Math.max(0, +el.value || 0);
       save(); if (p[1] !== 'n') render();
+    };
+  });
+  /* разделы подсчёта */
+  function countRuns() {
+    var runs = [];
+    CFG.count.forEach(function (c, i) {
+      var g = c.g || '', last = runs[runs.length - 1];
+      if (!last || last.g !== g) runs.push({ g: g, from: i, to: i });
+      else last.to = i;
+    });
+    return runs;
+  }
+  app.querySelectorAll('[data-cgrp]').forEach(function (el) {
+    el.onchange = function () {
+      var run = countRuns()[+el.dataset.cgrp], v = el.value.trim();
+      for (var i = run.from; i <= run.to; i++) {
+        if (v) CFG.count[i].g = v; else delete CFG.count[i].g;
+      }
+      save(); render();
+    };
+  });
+  app.querySelectorAll('[data-cmove]').forEach(function (el) {
+    el.onclick = function () {
+      var p = el.dataset.cmove.split('|'), i = +p[0], j = i + (+p[1]);
+      if (j < 0 || j >= CFG.count.length) return;
+      var t = CFG.count[i]; CFG.count[i] = CFG.count[j]; CFG.count[j] = t;
+      vibr(6); save(); render();
+    };
+  });
+  app.querySelectorAll('[data-addcp]').forEach(function (el) {
+    el.onclick = function () {
+      var run = countRuns()[+el.dataset.addcp];
+      var np = { id: 'c' + Date.now(), n: 'Новая позиция', price: 0 };
+      if (run.g) np.g = run.g;
+      CFG.count.splice(run.to + 1, 0, np);
+      save(); render();
+    };
+  });
+  app.querySelectorAll('[data-delcg]').forEach(function (el) {
+    var run = countRuns()[+el.dataset.delcg];
+    el.onclick = function () {
+      var n = run.to - run.from + 1;
+      if (CFG.count.length - n < 1) { toast('Должна остаться хотя бы одна позиция'); return; }
+      if (!confirm('Удалить раздел «' + (run.g || 'без названия') + '» и ' + n + ' позиц.? Посчитанное останется в базе.')) return;
+      CFG.count.splice(run.from, n);
+      save(); render();
     };
   });
   app.querySelectorAll('[data-delc]').forEach(function (el) {
@@ -1137,8 +1288,8 @@ function act(a, el) {
     case 'addw':
       CFG.crews.push({ id: 'w' + Date.now(), n: 'Бригада ' + (CFG.crews.length + 1) });
       save(); render(); break;
-    case 'addc':
-      CFG.count.push({ id: 'c' + Date.now(), n: 'Новая позиция', price: 0 });
+    case 'addcg':
+      CFG.count.push({ id: 'c' + Date.now(), n: 'Новая позиция', price: 0, g: 'Новый раздел' });
       save(); render(); break;
     case 'clearq':
       if (!confirm('Обнулить подсчёт по кв. ' + VIEW.flat + '?')) return;
@@ -1570,93 +1721,134 @@ function buildXlsx(IMG) {
 }
 /* ---------- наряд бригаде: только этот обход ---------- */
 function exportNaryad() {
-  var nd = naryad(UI.nper || 'today', UI.ncrew || 'all');
-  if (!nd.grand) { toast('За этот период ничего не отмечено'); return; }
+  var per = UI.nper || 'today', sel = UI.ncrew || 'all';
+  /* «Все бригады» — это не сводная каша, а лист на каждую бригаду отдельно */
+  var crews = sel === 'all' ? CFG.crews.map(function (w) { return w.id; }) : [sel];
+  var sets = crews.map(function (w) { return naryad(per, w); })
+    .filter(function (nd) { return nd.grand > 0; });
+  if (!sets.length) { toast('За этот период ничего не отмечено'); return; }
+
   var ids = [];
-  nd.rows.forEach(function (x) {
-    (x.r.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+  sets.forEach(function (nd) {
+    nd.rows.forEach(function (x) {
+      (x.r.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+    });
   });
   if (ids.length) toast('Готовлю наряд…');
-  preparePhotos(ids).then(function (IMG) { buildNaryad(nd, IMG); })
-    .catch(function () { buildNaryad(nd, {}); });
+  preparePhotos(ids).then(function (IMG) { buildNaryad(sets, IMG); })
+    .catch(function () { buildNaryad(sets, {}); });
 }
-function buildNaryad(nd, IMG) {
+
+function buildNaryad(sets, IMG) {
   var C = window.colName, withPrice = hasPrices(), nC = CFG.count.length;
-  var lastCol = 3 + nC + (withPrice ? 1 : 0);
-  var rows = [], merges = [];
+  var sheets = [];
 
-  rows.push([{ v: 'НАРЯД — ' + nd.crew.toUpperCase(), s: 6 }]);
-  merges.push('A1:' + C(lastCol) + '1');
-  rows.push([{ v: CFG.object + ' · ' + nd.period + ' · выгружено ' + dateStamp(), s: 3 }]);
-  merges.push('A2:' + C(lastCol) + '2');
+  sets.forEach(function (nd) {
+    var lastCol = 3 + nC + (withPrice ? 1 : 0);
+    var rows = [], merges = [];
 
-  var hdr = [{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }];
-  CFG.count.forEach(function (c) { hdr.push({ v: c.n, s: 1 }); });
-  hdr.push({ v: 'Всего шт.', s: 1 });
-  if (withPrice) hdr.push({ v: 'Сумма, ₽', s: 1 });
-  rows.push(hdr);
+    rows.push([{ v: 'НАРЯД — ' + nd.crew.toUpperCase(), s: 6 }]);
+    merges.push('A1:' + C(lastCol) + '1');
+    rows.push([{ v: CFG.object + ' · ' + nd.period + ' · выгружено ' + dateStamp(), s: 3 }]);
+    merges.push('A2:' + C(lastCol) + '2');
 
-  nd.rows.sort(function (a, z) {
-    return a.b.name.localeCompare(z.b.name) || a.f - z.f || a.n - z.n;
-  }).forEach(function (x) {
-    var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true }];
-    CFG.count.forEach(function (c) {
-      row.push(x.per[c.id] ? { v: x.per[c.id], s: 2, n: true } : { v: '', s: 2 });
+    /* строки 3-4: разделы подсчёта над названиями позиций */
+    var r3 = [{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }];
+    var r4 = [{ v: '', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }];
+    ['A', 'B', 'C'].forEach(function (col) { merges.push(col + '3:' + col + '4'); });
+    var i = 0;
+    while (i < nC) {
+      var c = CFG.count[i], col = 3 + i;
+      if (!c.g) {
+        r3[col] = { v: c.n, s: 1 }; r4[col] = { v: '', s: 1 };
+        merges.push(C(col) + '3:' + C(col) + '4');
+        i++;
+      } else {
+        var j = i;
+        while (j < nC && CFG.count[j].g === c.g) j++;
+        r3[col] = { v: c.g, s: 1 };
+        for (var k = i + 1; k < j; k++) r3[3 + k] = { v: '', s: 1 };
+        for (var k2 = i; k2 < j; k2++) r4[3 + k2] = { v: CFG.count[k2].n, s: 1 };
+        merges.push(C(col) + '3:' + C(3 + j - 1) + '3');
+        i = j;
+      }
+    }
+    var cTot = 3 + nC;
+    r3[cTot] = { v: 'Всего шт.', s: 1 }; r4[cTot] = { v: '', s: 1 };
+    merges.push(C(cTot) + '3:' + C(cTot) + '4');
+    if (withPrice) {
+      r3[cTot + 1] = { v: 'Сумма, ₽', s: 1 }; r4[cTot + 1] = { v: '', s: 1 };
+      merges.push(C(cTot + 1) + '3:' + C(cTot + 1) + '4');
+    }
+    rows.push(r3, r4);
+
+    nd.rows.sort(function (a, z) {
+      return a.b.name.localeCompare(z.b.name) || a.f - z.f || a.n - z.n;
+    }).forEach(function (x) {
+      var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true }];
+      CFG.count.forEach(function (c) {
+        row.push(x.per[c.id] ? { v: x.per[c.id], s: 2, n: true } : { v: '', s: 2 });
+      });
+      row.push({ v: x.sum, s: 2, n: true });
+      if (withPrice) row.push({ v: Math.round(x.money), s: 2, n: true });
+      rows.push(row);
     });
-    row.push({ v: x.sum, s: 2, n: true });
-    if (withPrice) row.push({ v: Math.round(x.money), s: 2, n: true });
-    rows.push(row);
+
+    var trow = [{ v: 'ИТОГО', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }];
+    CFG.count.forEach(function (c) { trow.push({ v: nd.totals[c.id] || 0, s: 1, n: true }); });
+    trow.push({ v: nd.grand, s: 1, n: true });
+    if (withPrice) trow.push({ v: Math.round(nd.money), s: 1, n: true });
+    rows.push(trow);
+    merges.push('A' + rows.length + ':C' + rows.length);
+
+    var cols = [{ w: 13 }, { w: 7 }, { w: 8 }];
+    CFG.count.forEach(function () { cols.push({ w: 13 }); });
+    cols.push({ w: 11 });
+    if (withPrice) cols.push({ w: 13 });
+
+    sheets.push({
+      name: ('Наряд — ' + nd.crew).slice(0, 31), cols: cols, rows: rows, merges: merges, freeze: 4,
+      print: { titles: '$3:$4', center: true, foot: CFG.object + ' · ' + nd.crew + ' · ' + nd.period }
+    });
   });
 
-  var trow = [{ v: 'ИТОГО', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }];
-  CFG.count.forEach(function (c) { trow.push({ v: nd.totals[c.id] || 0, s: 1, n: true }); });
-  trow.push({ v: nd.grand, s: 1, n: true });
-  if (withPrice) trow.push({ v: Math.round(nd.money), s: 1, n: true });
-  rows.push(trow);
-  merges.push('A' + rows.length + ':C' + rows.length);
-
-  var cols = [{ w: 13 }, { w: 7 }, { w: 8 }];
-  CFG.count.forEach(function () { cols.push({ w: 13 }); });
-  cols.push({ w: 11 });
-  if (withPrice) cols.push({ w: 13 });
-
-  var sheets = [{
-    name: 'Наряд', cols: cols, rows: rows, merges: merges, freeze: 3,
-    print: { titles: '$3:$3', center: true, foot: CFG.object + ' · ' + nd.crew + ' · ' + nd.period }
-  }];
-
-  /* второй лист — замечания и фото по тем же квартирам */
-  var ir = [[{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 },
+  /* замечания по квартирам всех этих нарядов */
+  var ir = [[{ v: 'Бригада', s: 1 }, { v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 },
   { v: 'Замечание', s: 1 }, { v: 'Фото', s: 1 }]];
-  var images = [], rh = {};
-  nd.rows.forEach(function (x) {
-    var r = x.r;
-    var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
-      .map(function (p) { return p.n; }).join(', ');
-    var txt = r.left || miss;
-    if (!txt && !(r.ph || []).length) return;
-    var rowIdx = ir.length;
-    ir.push([{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
-    { v: txt + (r.note ? '\n' + r.note : ''), s: 3 }, { v: '', s: 2 }]);
-    var id = (r.ph || [])[0], im = id && IMG[id];
-    if (im && im.full) {
-      images.push({ col: 4, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, 0) });
-      rh[rowIdx] = window.XLS.rowHeightPx(im.fh + 8);
-    }
+  var images = [], rh = {}, seen = {};
+  sets.forEach(function (nd) {
+    nd.rows.forEach(function (x) {
+      var key = x.b.id + '_' + x.n;
+      if (seen[key]) return;
+      var r = x.r;
+      var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
+        .map(function (p) { return p.n; }).join(', ');
+      var txt = r.left || miss;
+      if (!txt && !(r.ph || []).length) return;
+      seen[key] = 1;
+      var rowIdx = ir.length;
+      ir.push([{ v: nd.crew, s: 3 }, { v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
+      { v: txt + (r.note ? '\n' + r.note : ''), s: 3 }, { v: '', s: 2 }]);
+      var id = (r.ph || [])[0], im = id && IMG[id];
+      if (im && im.full) {
+        images.push({ col: 5, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, 0) });
+        rh[rowIdx] = window.XLS.rowHeightPx(im.fh + 8);
+      }
+    });
   });
   if (ir.length > 1) {
     sheets.push({
       name: 'Замечания обхода',
-      cols: [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 46 }, { w: window.XLS.colWidthPx(BIG_W + 10) }],
+      cols: [{ w: 15 }, { w: 13 }, { w: 7 }, { w: 8 }, { w: 42 }, { w: window.XLS.colWidthPx(BIG_W + 10) }],
       rows: ir, merges: [], rowHeights: rh, images: images, freeze: 1,
       print: { titles: '$1:$1', foot: CFG.object + ' · замечания обхода' }
     });
   }
 
+  var nm = sets.length === 1 ? sets[0].crew.replace(/\s+/g, '_') : 'бригады';
   try {
-    download(window.XLS.workbook(sheets),
-      'Наряд_' + nd.crew.replace(/\s+/g, '_') + '_' + dateStamp() + '.xlsx');
-    toast('Наряд готов');
+    download(window.XLS.workbook(sheets), 'Наряд_' + nm + '_' + dateStamp() + '.xlsx');
+    toast('Наряд готов: листов ' + sheets.length);
   } catch (e) { alert('Не удалось собрать наряд: ' + e.message); }
 }
 
@@ -1826,6 +2018,7 @@ function applyMerge() {
     if (c.pick === 'theirs') { DATA[c.bid][c.n] = c.theirs; took++; } else kept++;
   });
   PENDING = null;
+  ensureCfg();
   save();
   toast('Принято квартир: ' + took + (kept ? ', оставлено своих: ' + kept : ''));
   go('obj');
@@ -1890,7 +2083,7 @@ function restore() {
         var o = JSON.parse(fr.result);
         if (!o.cfg || !o.data) throw new Error('не тот файл');
         if (!confirm('Заменить текущие данные данными из копии?')) return;
-        CFG = o.cfg; DATA = o.data;
+        CFG = o.cfg; DATA = o.data; ensureCfg();
         PH = {}; PHQ = [];
         var ph = o.ph || {}, keys = Object.keys(ph), k = 0;
         toast('Переношу ' + keys.length + ' фото…');
