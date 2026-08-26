@@ -960,8 +960,8 @@ function viewSettings() {
     var rows = run.items.map(function (it, k) {
       return '<div class="drag"><span class="item-ico">' + posIcon(it.p.n) + '</span>' +
         '<input type="text" data-p="' + it.i + '|n" value="' + h(it.p.n) + '">' +
-        '<button class="iconbtn mini" data-move="' + it.i + '|-1"' + (k === 0 ? ' disabled' : '') + ' aria-label="выше">' + I.up + '</button>' +
-        '<button class="iconbtn mini" data-move="' + it.i + '|1"' + (k === run.items.length - 1 ? ' disabled' : '') + ' aria-label="ниже">' + I.down + '</button>' +
+        '<button class="iconbtn mini" data-move="' + it.i + '|-1"' + (it.i === 0 ? ' disabled' : '') + ' aria-label="выше">' + I.up + '</button>' +
+        '<button class="iconbtn mini" data-move="' + it.i + '|1"' + (it.i === CFG.positions.length - 1 ? ' disabled' : '') + ' aria-label="ниже">' + I.down + '</button>' +
         '<button class="iconbtn mini" data-delp="' + it.i + '" style="color:var(--bad)" aria-label="удалить">' + I.trash + '</button></div>';
     }).join('');
     return '<div class="grpbox">' +
@@ -1002,8 +1002,8 @@ function viewSettings() {
             '<input type="number" inputmode="decimal" data-c="' + it.i + '|price" value="' + (+it.c.price || 0) +
             '" style="width:66px;text-align:right;font-size:14px" aria-label="цена за штуку">' +
             '<span style="color:var(--muted-fg);font-size:12px">₽</span>' +
-            '<button class="iconbtn mini" data-cmove="' + it.i + '|-1"' + (k === 0 ? ' disabled' : '') + ' aria-label="выше">' + I.up + '</button>' +
-            '<button class="iconbtn mini" data-cmove="' + it.i + '|1"' + (k === run.items.length - 1 ? ' disabled' : '') + ' aria-label="ниже">' + I.down + '</button>' +
+            '<button class="iconbtn mini" data-cmove="' + it.i + '|-1"' + (it.i === 0 ? ' disabled' : '') + ' aria-label="выше">' + I.up + '</button>' +
+            '<button class="iconbtn mini" data-cmove="' + it.i + '|1"' + (it.i === CFG.count.length - 1 ? ' disabled' : '') + ' aria-label="ниже">' + I.down + '</button>' +
             '<button class="iconbtn mini" data-delc="' + it.i + '" style="color:var(--bad)" aria-label="убрать">' + I.trash + '</button></div>';
         }).join('');
         return '<div class="grpbox">' +
@@ -1075,6 +1075,20 @@ function tabbar() {
   }
   return '<div class="tabbar">' + t('obj', I.home, 'Объект') + t('issues', I.msg, 'Замечания') +
     t('count', I.calc, 'Подсчёт') + t('export', I.file, 'Выгрузка') + t('settings', I.gear, 'Настройки') + '</div>';
+}
+
+/* Стрелка на краю раздела не переставляет позицию, а переносит её в соседний
+   раздел — иначе разложить готовый список по разделам просто нечем. */
+function moveInList(list, i, dir) {
+  var j = i + dir;
+  if (j < 0 || j >= list.length) return;
+  var g = list[i].g || '', ng = list[j].g || '';
+  if (g !== ng) {
+    if (ng) list[i].g = ng; else delete list[i].g;
+  } else {
+    var t = list[i]; list[i] = list[j]; list[j] = t;
+  }
+  vibr(6); save(); render();
 }
 
 /* ============ события ============ */
@@ -1182,10 +1196,8 @@ function bind() {
   });
   app.querySelectorAll('[data-cmove]').forEach(function (el) {
     el.onclick = function () {
-      var p = el.dataset.cmove.split('|'), i = +p[0], j = i + (+p[1]);
-      if (j < 0 || j >= CFG.count.length) return;
-      var t = CFG.count[i]; CFG.count[i] = CFG.count[j]; CFG.count[j] = t;
-      vibr(6); save(); render();
+      var p = el.dataset.cmove.split('|');
+      moveInList(CFG.count, +p[0], +p[1]);
     };
   });
   app.querySelectorAll('[data-addcp]').forEach(function (el) {
@@ -1291,10 +1303,8 @@ function bind() {
   });
   app.querySelectorAll('[data-move]').forEach(function (el) {
     el.onclick = function () {
-      var p = el.dataset.move.split('|'), i = +p[0], j = i + (+p[1]);
-      if (j < 0 || j >= CFG.positions.length) return;
-      var t = CFG.positions[i]; CFG.positions[i] = CFG.positions[j]; CFG.positions[j] = t;
-      vibr(6); save(); render();
+      var p = el.dataset.move.split('|');
+      moveInList(CFG.positions, +p[0], +p[1]);
     };
   });
   app.querySelectorAll('[data-addp]').forEach(function (el) {
