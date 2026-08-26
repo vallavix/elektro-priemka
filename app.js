@@ -305,11 +305,18 @@ function byCrew(r) {
   if (!r) return out;
   if (r.lg && r.lg.length) {
     r.lg.forEach(function (e) {
-      if (e.d <= 0) return;
       var w = e.w || '?';
       out[w] = out[w] || { per: {}, total: 0 };
-      out[w].per[e.c] = (out[w].per[e.c] || 0) + e.d;
-      out[w].total += e.d;
+      out[w].per[e.c] = (out[w].per[e.c] || 0) + e.d;   /* минус тоже считается */
+    });
+    Object.keys(out).forEach(function (w) {
+      var t = 0;
+      Object.keys(out[w].per).forEach(function (c) {
+        if (out[w].per[c] < 0) out[w].per[c] = 0;       /* в минус не уходим */
+        if (!out[w].per[c]) delete out[w].per[c]; else t += out[w].per[c];
+      });
+      out[w].total = t;
+      if (!t) delete out[w];
     });
     return out;
   }
@@ -351,7 +358,6 @@ function countReassign(ra, apply) {
         });
       }
       r.lg.forEach(function (e) {
-        if (e.d <= 0) return;
         if (ra.c && ra.c !== 'all' && ra.c !== e.c) return;
         if ((e.w || '?') !== from) return;
         n += e.d;
@@ -433,11 +439,12 @@ function naryad(period, crew) {
       r.lg.forEach(function (e) {
         if (e.t < from || e.t >= to) return;
         if (crew !== 'all' && e.w !== crew) return;
-        if (e.d <= 0) return;                    /* в наряд идёт только сделанное */
-        per[e.c] = (per[e.c] || 0) + e.d;
-        sum += e.d;
+        per[e.c] = (per[e.c] || 0) + e.d;        /* отменённое вычитается */
         crews[e.w] = 1;
         if (e.t > last) last = e.t;
+      });
+      Object.keys(per).forEach(function (c) {
+        if (per[c] <= 0) delete per[c]; else sum += per[c];
       });
       if (!sum) return;
       CFG.count.forEach(function (c) {
