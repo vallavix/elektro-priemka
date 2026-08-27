@@ -900,6 +900,12 @@ function viewExport() {
         'Замечания и фото за этот же период идут вторым листом.</div>';
     })() +
 
+    '<div class="sec" style="margin-top:26px">Начальнику участка</div>' +
+    '<button class="btn btn-ghost" data-act="bossexp">' + I.share + ' Выгрузка для начальника</button>' +
+    '<div class="hint">Маленький файл только с итогами: что принято, замечания и сколько чего '
+    + 'насчитала каждая бригада. <b>Без фотографий</b> — уходит в мессенджер мгновенно, '
+    + 'в отличие от резервной копии. Начальник открывает его в приложении «Участок».</div>' +
+
     '<div class="sec" style="margin-top:26px">Напарник</div>' +
     '<button class="btn btn-ghost" data-act="share" style="margin-bottom:10px">' + I.share + ' Передать напарнику</button>' +
     '<button class="btn btn-ghost" data-act="merge">' + I.merge + ' Принять от напарника</button>' +
@@ -1452,6 +1458,7 @@ function act(a, el) {
     case 'xlsx': exportXlsx(); break;
     case 'photozip': exportPhotos(); break;
     case 'backup': backup(); break;
+    case 'bossexp': bossExport(); break;
   }
 }
 
@@ -2172,6 +2179,50 @@ function viewMerge() {
     '</div>' +
     '<div class="navbar"><button class="btn btn-ghost" data-act="cancelmerge">Отмена</button>' +
     '<button class="btn btn-primary" data-act="applymerge">' + I.check + ' Применить</button></div>';
+}
+
+/* Выгрузка начальнику: только итоги, без фото и без служебного журнала нажатий.
+   Резервная копия с фотографиями весит десятки мегабайт и в мессенджер идёт долго,
+   а начальнику нужны цифры, а не снимки. */
+function bossExport() {
+  var out = {
+    t: 'uch-export', v: 1, obj: CFG.object, at: Date.now(),
+    crews: CFG.crews.map(function (w) { return { id: w.id, n: w.n }; }),
+    count: CFG.count.map(function (c) { return { id: c.id, n: c.n }; }),
+    positions: CFG.positions.map(function (p) { return { id: p.id, n: p.n }; }),
+    buildings: CFG.buildings.map(function (b) {
+      return { id: b.id, name: b.name, from: b.from, to: b.to, per: b.per, first: b.first, ex: b.ex || null };
+    }),
+    flats: {}
+  };
+  var n = 0;
+  CFG.buildings.forEach(function (b) {
+    var d = DATA[b.id] || {}, o = {};
+    allFlats(b).forEach(function (x) {
+      var r = d[x.n];
+      if (!r) return;
+      var st = status(r), rec2 = {};
+      if (st === 'ok') rec2.c = 1;
+      else if (st === 'warn' || st === 'bad') rec2.c = 2;
+      var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
+        .map(function (p) { return p.n; });
+      if (miss.length) rec2.miss = miss.join(', ');
+      if (r.left) rec2.left = r.left;
+      if (r.crit) rec2.crit = 1;
+      if (r.fix) rec2.fix = r.fix;
+      if (qTotal(r)) rec2.q = r.q;
+      /* по бригадам — ради этого начальник и смотрит подсчёт */
+      var bc = byCrew(r), w = {};
+      Object.keys(bc).forEach(function (k) { w[k] = bc[k].per; });
+      if (Object.keys(w).length) rec2.w = w;
+      if (Object.keys(rec2).length) { o[x.n] = rec2; n++; }
+    });
+    if (Object.keys(o).length) out.flats[b.id] = o;
+  });
+  if (!n) { toast('Пока нечего выгружать'); return; }
+  download(new Blob([JSON.stringify(out)], { type: 'application/json' }),
+    'Начальнику_' + dateStamp() + '.json');
+  toast('Готово: квартир ' + n);
 }
 
 function backup() {
