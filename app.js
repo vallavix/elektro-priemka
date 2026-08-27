@@ -98,11 +98,33 @@ function ensureCfg() {
   if (!CFG.crews || !CFG.crews.length) CFG.crews = JSON.parse(JSON.stringify(DEFAULT_CREWS));
   if (!CFG.object) CFG.object = DEFAULT_CFG.object;
 }
+/* Раньше полей было два — «Что осталось» и «Примечание». Смысла в этом не было:
+   писали куда придётся, а читать приходилось оба. Осталось одно, старые
+   примечания дописываются к нему при первом запуске новой версии. */
+function mergeNotes() {
+  var moved = 0;
+  Object.keys(DATA || {}).forEach(function (bid) {
+    var d = DATA[bid] || {};
+    Object.keys(d).forEach(function (n) {
+      var r = d[n];
+      if (!r || !r.note) return;
+      var t = String(r.note).trim();
+      if (t) {
+        r.left = r.left ? (r.left.trim() + '\n' + t) : t;
+        moved++;
+      }
+      delete r.note;
+    });
+  });
+  return moved;
+}
+
 function load() {
   try { CFG = JSON.parse(localStorage.getItem('shm_cfg')) || null; } catch (e) { CFG = null; }
   ensureCfg();
   try { DATA = JSON.parse(localStorage.getItem('shm_data')) || {}; } catch (e) { DATA = {}; }
   try { UI = JSON.parse(localStorage.getItem('shm_ui')) || {}; } catch (e) { UI = {}; }
+  if (mergeNotes()) save();
   if (!UI.b) UI.b = CFG.buildings[0].id;
   if (UI.floor == null) UI.floor = CFG.buildings[0].from;
   UI.tab = UI.tab || 'obj';
@@ -470,7 +492,7 @@ function status(r) {
   var filled = vals.filter(function (v) { return v != null; }).length;
   var bad = vals.filter(function (v) { return v === 0; }).length;
   if (bad) return r.crit ? 'bad' : 'warn';
-  if (filled === 0) return (r.left || r.note) ? 'part' : 'new';
+  if (filled === 0) return r.left ? 'part' : 'new';
   if (filled === vals.length) return 'ok';
   return 'part';
 }
@@ -634,8 +656,6 @@ function viewFlat() {
     '<div class="cnt"><span id="leftc">' + (r.left || '').length + '</span>/200</div>' +
     '<div class="crit"><b>Критичное замечание</b><span class="sw' + (r.crit ? ' on' : '') + '" data-act="crit"></span></div>' +
     '<label class="fld">Фото</label><div class="photos" id="photos">' + photosHtml(r) + '</div>' +
-    '<label class="fld">Примечание</label>' +
-    '<textarea id="note" rows="2" placeholder="Необязательно">' + h(r.note) + '</textarea>' +
     '</div>' + navbar(prev, next);
 }
 /* ---------- быстрые заметки ----------
@@ -1375,7 +1395,6 @@ function bind() {
     document.getElementById('leftc').textContent = left.value.length; save();
   };
   var note = document.getElementById('note');
-  if (note) note.oninput = function () { var r = rec(UI.b, VIEW.flat, true); r.note = note.value; save(); };
   var on = document.getElementById('objname');
   if (on) on.onchange = function () { CFG.object = on.value; save(); };
 
@@ -1598,7 +1617,7 @@ function buildXlsx(IMG) {
 
     cols.push({ w: 7 }, { w: 8 }, { w: 9 });
     CFG.positions.forEach(function () { cols.push({ w: 11 }); });
-    cols.push({ w: 34 }, { w: 22 });
+    cols.push({ w: 40 });
 
     /* строка 1 — заголовок корпуса */
     var r1 = [{ v: b.name.toUpperCase(), s: 6 }];
@@ -1627,11 +1646,9 @@ function buildXlsx(IMG) {
         i = j;
       }
     }
-    var cLeft = OFF + nPos, cNote = cLeft + 1;
+    var cLeft = OFF + nPos;
     r2[cLeft] = { v: 'Что осталось', s: 1 }; r3[cLeft] = { v: '', s: 1 };
     merges.push(C(cLeft) + '2:' + C(cLeft) + '3');
-    r2[cNote] = { v: 'Примечание', s: 1 }; r3[cNote] = { v: '', s: 1 };
-    merges.push(C(cNote) + '2:' + C(cNote) + '3');
     rows.push(r2, r3);
 
     /* данные */
@@ -1648,7 +1665,6 @@ function buildXlsx(IMG) {
           row[OFF + pi] = v === 1 ? { v: '✓', s: 4 } : v === 0 ? { v: '✗', s: 5 } : v === 2 ? { v: '—', s: 7 } : { v: '', s: 2 };
         });
         row[cLeft] = { v: (r && r.left) || '', s: 3 };
-        row[cNote] = { v: (r && r.note) || '', s: 3 };
         rows.push(row); rowNo++;
       });
       if (fs.length > 1) merges.push('A' + startRow + ':A' + (rowNo - 1));
@@ -1679,7 +1695,6 @@ function buildXlsx(IMG) {
           .map(function (p) { return p.n; }).join(', ');
         var task = miss;
         if (r.left) task += (task ? ' — ' : '') + r.left;
-        if (r.note) task += ' (' + r.note + ')';
         if (r.crit) task = '⚠ ' + task;
         rows.push([
           i === 0 ? { v: fl, s: 2, n: true } : { v: '', s: 2 },
@@ -1760,9 +1775,9 @@ function buildXlsx(IMG) {
   });
 
   /* лист замечаний — с настоящими фото, встроенными в ячейки */
-  var PHCOL = 8, MAXPH = 3;          // с какой колонки идут фото и сколько их влезает
+  var PHCOL = 7, MAXPH = 3;          // с какой колонки идут фото и сколько их влезает
   var ir = [[{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: '№ на эт.', s: 1 },
-  { v: 'Тип', s: 1 }, { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 }, { v: 'Примечание', s: 1 },
+  { v: 'Тип', s: 1 }, { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 },
   { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]];
   var images = [], rowHeights = {}, big = [];
   expBuildings().forEach(function (b) {
@@ -1774,7 +1789,7 @@ function buildXlsx(IMG) {
       var idx = flatsOf(b, x.f).indexOf(x.n) + 1;
       var row = [{ v: b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
       { v: idx, s: 2, n: true }, { v: r.crit ? 'Критично' : 'Обычное', s: 2 },
-      { v: miss, s: 3 }, { v: r.left || '', s: 3 }, { v: r.note || '', s: 3 }];
+      { v: miss, s: 3 }, { v: r.left || '', s: 3 }];
       for (var c = 0; c < MAXPH; c++) row[PHCOL + c] = { v: '', s: 2 };
       var rowIdx = ir.length;
       ir.push(row);
@@ -1802,7 +1817,7 @@ function buildXlsx(IMG) {
   });
   sheets.push({
     name: 'Замечания',
-    cols: [{ w: 14 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }, { w: 28 }, { w: 32 }, { w: 20 },
+    cols: [{ w: 14 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }, { w: 28 }, { w: 40 },
     { w: window.XLS.colWidthPx(THUMB_BOX + 8) }, { w: window.XLS.colWidthPx(THUMB_BOX + 8) },
     { w: window.XLS.colWidthPx(THUMB_BOX + 8) }],
     rows: ir, merges: [], rowHeights: rowHeights, images: images, freeze: 1,
@@ -1819,7 +1834,7 @@ function buildXlsx(IMG) {
       pr.push([
         { v: it.b.name + '\nЭтаж ' + it.x.f + '\nКв. ' + it.x.n + ' (№' + idx + ')' +
           (it.r.crit ? '\n⚠ Критично' : ''), s: 3 },
-        { v: (it.r.left || it.miss || '') + (it.r.note ? '\n' + it.r.note : ''), s: 3 },
+        { v: it.r.left || it.miss || '', s: 3 },
         { v: '', s: 2 }
       ]);
       pimg.push({ col: 2, row: rowIdx, data: it.im.full, wpx: it.im.fw, hpx: it.im.fh,
@@ -2014,7 +2029,7 @@ function sig(r) {
   if (!r) return '';
   var st = CFG.positions.map(function (p) { return p.id + ':' + (r.st[p.id] == null ? '-' : r.st[p.id]); }).join(',');
   var q = CFG.count.map(function (c) { return c.id + ':' + qOf(r, c.id); }).join(',');
-  return st + '|' + q + '|' + (r.left || '') + '|' + (r.note || '') + '|' + (r.crit ? 1 : 0) + '|' + ((r.ph || []).length);
+  return st + '|' + q + '|' + (r.left || '') + '|' + (r.crit ? 1 : 0) + '|' + ((r.ph || []).length);
 }
 function summarize(r) {
   if (!r) return 'ничего не отмечено';
