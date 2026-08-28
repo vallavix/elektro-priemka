@@ -59,11 +59,12 @@ function posIcon(name) {
 /* ============ конфигурация по умолчанию ============ */
 /* что считаем на сдельщине: штуки по квартире, цена за штуку необязательна */
 var DEFAULT_COUNT = [
-  { id: 'c1', n: 'Розетки', price: 0 },
-  { id: 'c2', n: 'Выключатели', price: 0 },
-  { id: 'c3', n: 'Светильники', price: 0 },
-  { id: 'c4', n: 'Бра', price: 0 },
-  { id: 'c5', n: 'Люстры', price: 0 }
+  { id: 'c1', n: 'Розетки', price: 0, g: 'Квартира' },
+  { id: 'c2', n: 'Выключатели', price: 0, g: 'Квартира' },
+  { id: 'c5', n: 'Светильники', price: 0, g: 'Квартира' },
+  { id: 'c6', n: 'Розетки', price: 0, g: 'Санузел' },
+  { id: 'c3', n: 'Светильники', price: 0, g: 'Санузел' },
+  { id: 'c4', n: 'Бра', price: 0, g: 'Санузел' }
 ];
 
 var DEFAULT_CREWS = [{ id: 'w1', n: 'Моя бригада' }];
@@ -119,12 +120,26 @@ function mergeNotes() {
   return moved;
 }
 
+/* Розетки есть и в санузле — в проекте они отдельные, влагозащищённые.
+   Если подсчёт уже разбит на разделы, а такой позиции нет, добавляем её сами:
+   иначе объёмы по санузлу считать нечем. */
+function ensureWcSocket() {
+  if (!CFG.count || !CFG.count.length) return false;
+  var wc = CFG.count.filter(function (c) { return /санузел|с\/у|ванн/i.test(String(c.g || '')); });
+  if (!wc.length) return false;
+  if (wc.some(function (c) { return /розетк/i.test(c.n); })) return false;
+  var i = CFG.count.indexOf(wc[0]);
+  CFG.count.splice(i, 0, { id: 'c' + Date.now(), n: 'Розетки', price: 0, g: wc[0].g });
+  return true;
+}
+
 function load() {
   try { CFG = JSON.parse(localStorage.getItem('shm_cfg')) || null; } catch (e) { CFG = null; }
   ensureCfg();
   try { DATA = JSON.parse(localStorage.getItem('shm_data')) || {}; } catch (e) { DATA = {}; }
   try { UI = JSON.parse(localStorage.getItem('shm_ui')) || {}; } catch (e) { UI = {}; }
   if (mergeNotes()) save();
+  if (ensureWcSocket()) save();
   if (!UI.b) UI.b = CFG.buildings[0].id;
   if (UI.floor == null) UI.floor = CFG.buildings[0].from;
   UI.tab = UI.tab || 'obj';
@@ -2203,8 +2218,9 @@ function bossExport() {
   var out = {
     t: 'uch-export', v: 1, obj: CFG.object, at: Date.now(),
     crews: CFG.crews.map(function (w) { return { id: w.id, n: w.n }; }),
-    count: CFG.count.map(function (c) { return { id: c.id, n: c.n }; }),
-    positions: CFG.positions.map(function (p) { return { id: p.id, n: p.n }; }),
+    /* раздел обязателен: по нему начальник делит квартиру и санузел */
+    count: CFG.count.map(function (c) { return { id: c.id, n: c.n, g: c.g || '' }; }),
+    positions: CFG.positions.map(function (p) { return { id: p.id, n: p.n, g: p.g || '' }; }),
     buildings: CFG.buildings.map(function (b) {
       return { id: b.id, name: b.name, from: b.from, to: b.to, per: b.per, first: b.first, ex: b.ex || null };
     }),
