@@ -322,6 +322,9 @@ function rec(bid, n, create) {
 }
 /* ---- подсчёт на сдельщине ---- */
 function qOf(r, cid) { return (r && r.q && r.q[cid]) || 0; }
+/* когда последний раз трогали приёмку этой квартиры (подсчёт сюда не входит) */
+function touchIssue(r) { r.sts = Date.now(); r.ts = r.sts; }
+function issueTs(r) { return (r && (r.sts || r.ts)) || 0; }
 function qTotal(r) {
   var s = 0;
   CFG.count.forEach(function (c) { s += qOf(r, c.id); });
@@ -500,6 +503,51 @@ function naryad(period, crew) {
 }
 function money(v) {
   return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+}
+
+/* ---- замечания приёмки за период или за конкретный день ---- */
+function periodRange(period, day) {
+  if (day) {
+    var d = new Date(day + 'T00:00:00');
+    if (!isNaN(d)) return { from: d.getTime(), to: d.getTime() + 86400000, n: dayLabel(day) };
+  }
+  var P = PERIODS[period] || PERIODS.today;
+  return { from: P.from(), to: P.to(), n: P.n };
+}
+function dayLabel(day) {
+  var p = String(day).split('-');
+  return p.length === 3 ? p[2] + '.' + p[1] + '.' + p[0] : day;
+}
+/* дни, в которые вообще что-то отмечали — чтобы было из чего выбирать */
+function issueDays() {
+  var set = {};
+  CFG.buildings.forEach(function (b) {
+    var d = DATA[b.id] || {};
+    Object.keys(d).forEach(function (n) {
+      var t = issueTs(d[n]);
+      if (!t) return;
+      var dt = new Date(t);
+      set[dt.getFullYear() + '-' + ('0' + (dt.getMonth() + 1)).slice(-2) + '-' + ('0' + dt.getDate()).slice(-2)] = 1;
+    });
+  });
+  return Object.keys(set).sort().reverse();
+}
+function issuesInPeriod(period, day) {
+  var R = periodRange(period, day), out = [];
+  expBuildings().forEach(function (b) {
+    var d = DATA[b.id] || {};
+    allFlats(b).forEach(function (x) {
+      var r = d[x.n], s = status(r);
+      if (s !== 'bad' && s !== 'warn') return;
+      var t = issueTs(r);
+      if (t < R.from || t >= R.to) return;
+      var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
+        .map(function (p) { return p.n; }).join(', ');
+      out.push({ b: b, f: x.f, n: x.n, r: r, miss: miss, ts: t });
+    });
+  });
+  out.sort(function (a, z) { return a.b.name.localeCompare(z.b.name) || a.f - z.f || a.n - z.n; });
+  return { rows: out, label: R.n };
 }
 function status(r) {
   if (!r) return 'new';
@@ -907,6 +955,29 @@ function viewExport() {
     '<div class="hint">Файл по форме начальника: лист на каждый корпус + лист «Замечания». Открывается в Excel и Numbers.</div>' +
     '<button class="btn btn-ghost" data-act="photozip">' + I.cam + ' Скачать фото (.zip)</button>' +
     '<div class="hint">Имена файлов — Корпус_Этаж_Кв.jpg, совпадают с колонкой «Фото» в листе замечаний.</div>' +
+    /* ---- замечания приёмки за период ---- */
+    (function () {
+      var ip = UI.iper || 'today', day = UI.iday || '';
+      var res = issuesInPeriod(ip, day);
+      var days = issueDays().slice(0, 14);
+      return '<div class="sec" style="margin-top:26px">Замечания за обход</div>' +
+        '<div class="tabs">' + Object.keys(PERIODS).map(function (k) {
+          return '<button class="tab ' + (!day && ip === k ? 'on' : '') + '" data-iper="' + k + '">' + PERIODS[k].n + '</button>';
+        }).join('') + '</div>' +
+        (days.length > 1 ? '<div class="tabs">' + days.map(function (dd) {
+          return '<button class="tab ' + (day === dd ? 'on' : '') + '" data-iday="' + dd + '">' + dayLabel(dd) + '</button>';
+        }).join('') + '</div>' : '') +
+        '<div class="card prog" style="margin-bottom:12px"><div class="prog-top"><div>' +
+        '<div class="prog-lbl">Замечаний · ' + h(res.label) + '</div>' +
+        '<div class="prog-num">' + res.rows.length + '</div></div>' +
+        '<div class="prog-cnt">критичных: ' +
+        res.rows.filter(function (x) { return x.r.crit; }).length + '</div></div></div>' +
+        '<button class="btn btn-primary" data-act="issuesx"' + (res.rows.length ? '' : ' disabled') + '>' +
+        I.msg + ' Скачать замечания за обход</button>' +
+        '<div class="hint">Только те квартиры, где отметки приёмки ставились в выбранный день — чтобы отдать список ' +
+        'по сегодняшнему обходу, а не по всему дому. Фотографии идут в тех же строках.</div>';
+    })() +
+
     /* ---- наряд по обходу ---- */
     (function () {
       var per = UI.nper || 'today', nc = UI.ncrew || 'all';
@@ -1175,6 +1246,15 @@ function bind() {
   app.querySelectorAll('[data-crew]').forEach(function (el) {
     el.onclick = function () { UI.crew = el.dataset.crew; vibr(6); save(); render(); };
   });
+  app.querySelectorAll('[data-iper]').forEach(function (el) {
+    el.onclick = function () { UI.iper = el.dataset.iper; UI.iday = ''; save(); render(); };
+  });
+  app.querySelectorAll('[data-iday]').forEach(function (el) {
+    el.onclick = function () {
+      UI.iday = UI.iday === el.dataset.iday ? '' : el.dataset.iday;
+      save(); render();
+    };
+  });
   app.querySelectorAll('[data-per]').forEach(function (el) {
     el.onclick = function () { UI.nper = el.dataset.per; save(); render(); };
   });
@@ -1279,7 +1359,7 @@ function bind() {
       var phrase = quickPhrases()[+el.dataset.chip];
       var r = rec(UI.b, VIEW.flat, true);
       r.left = togglePhrase(r.left, phrase);
-      r.ts = Date.now(); vibr(8); save(); render();
+      touchIssue(r); vibr(8); save(); render();
     };
   });
   app.querySelectorAll('[data-pick]').forEach(function (el) {
@@ -1302,7 +1382,7 @@ function bind() {
       var p = el.dataset.set.split('|'), r = rec(UI.b, VIEW.flat, true), v = +p[1];
       r.st[p[0]] = r.st[p[0]] === v ? undefined : v;
       if (r.st[p[0]] === undefined) delete r.st[p[0]];
-      r.ts = Date.now(); vibr(8); save(); render();
+      touchIssue(r); vibr(8); save(); render();
     };
   });
   app.querySelectorAll('[data-delph]').forEach(function (el) {
@@ -1406,7 +1486,7 @@ function bind() {
 
   var left = document.getElementById('left');
   if (left) left.oninput = function () {
-    var r = rec(UI.b, VIEW.flat, true); r.left = left.value; r.ts = Date.now();
+    var r = rec(UI.b, VIEW.flat, true); r.left = left.value; touchIssue(r);
     document.getElementById('leftc').textContent = left.value.length; save();
   };
   var note = document.getElementById('note');
@@ -1452,13 +1532,13 @@ function act(a, el) {
     case 'allok':
       r = rec(UI.b, VIEW.flat, true);
       CFG.positions.forEach(function (p) { r.st[p.id] = 1; });
-      r.ts = Date.now(); vibr(18); save();
+      touchIssue(r); vibr(18); save();
       nextFlat();
       break;
     case 'restok':
       r = rec(UI.b, VIEW.flat, true);
       CFG.positions.forEach(function (p) { if (r.st[p.id] == null) r.st[p.id] = 1; });
-      r.ts = Date.now(); vibr(14); save(); render();
+      touchIssue(r); vibr(14); save(); render();
       break;
     case 'clear':
       if (!confirm('Сбросить отметки по кв. ' + VIEW.flat + '?')) return;
@@ -1466,7 +1546,7 @@ function act(a, el) {
       save(); render();
       break;
     case 'crit':
-      r = rec(UI.b, VIEW.flat, true); r.crit = !r.crit; vibr(10); save(); render();
+      r = rec(UI.b, VIEW.flat, true); r.crit = !r.crit; touchIssue(r); vibr(10); save(); render();
       break;
     case 'addph': pickPhoto('ph'); break;
     case 'addfixph': pickPhoto('fixph'); break;
@@ -1489,6 +1569,7 @@ function act(a, el) {
     case 'cancelmerge': PENDING = null; go('export'); break;
 
     case 'naryad': exportNaryad(); break;
+    case 'issuesx': exportIssuesPeriod(); break;
     case 'xlsx': exportXlsx(); break;
     case 'photozip': exportPhotos(); break;
     case 'backup': backup(); break;
@@ -1528,7 +1609,7 @@ function pickPhoto(field) {
         idb.put(id, url);
         var r = rec(UI.b, VIEW.flat, true), key = field || 'ph';
         r[key] = r[key] || []; r[key].push(id); r.ts = Date.now();
-        if (key === 'fixph') { r.fixw = UI.crew; r.fixts = Date.now(); }
+        if (key === 'fixph') { r.fixw = UI.crew; r.fixts = Date.now(); } else touchIssue(r);
         save(); render();
       };
       img.src = fr.result;
@@ -1869,6 +1950,61 @@ function buildXlsx(IMG) {
     toast('Шахматка выгружена');
   } catch (e) { alert('Не удалось собрать файл: ' + e.message); }
 }
+/* ---------- замечания одного обхода ---------- */
+function exportIssuesPeriod() {
+  var res = issuesInPeriod(UI.iper || 'today', UI.iday || '');
+  if (!res.rows.length) { toast('За этот день замечаний нет'); return; }
+  var ids = [];
+  res.rows.forEach(function (x) {
+    (x.r.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+  });
+  if (ids.length) toast('Готовлю снимки…');
+  preparePhotos(ids).then(function (IMG) { buildIssuesPeriod(res, IMG); })
+    .catch(function () { buildIssuesPeriod(res, {}); });
+}
+function buildIssuesPeriod(res, IMG) {
+  var C = window.colName, MAXPH = 3;
+  var rows = [], merges = [], images = [], rh = {};
+  var lastCol = 6 + MAXPH;
+
+  rows.push([{ v: 'ЗАМЕЧАНИЯ — ' + res.label.toUpperCase(), s: 6 }]);
+  merges.push('A1:' + C(lastCol) + '1');
+  rows.push([{ v: CFG.object + ' · выгружено ' + dateStamp(), s: 3 }]);
+  merges.push('A2:' + C(lastCol) + '2');
+  rows.push([{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: 'Тип', s: 1 },
+  { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 },
+  { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]);
+
+  res.rows.forEach(function (x) {
+    var r = x.r, rowIdx = rows.length;
+    var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
+    { v: r.crit ? 'Критично' : 'Обычное', s: 2 }, { v: x.miss, s: 3 },
+    { v: r.left || '', s: 3 }];
+    for (var c = 0; c < MAXPH; c++) row.push({ v: '', s: 2 });
+    rows.push(row);
+    (r.ph || []).slice(0, MAXPH).forEach(function (id, k) {
+      var im = IMG[id];
+      if (!im || !im.full) return;
+      images.push({ col: 6 + k, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, k) });
+      rh[rowIdx] = Math.max(rh[rowIdx] || 0, window.XLS.rowHeightPx(im.fh + 8));
+    });
+  });
+
+  var pw = window.XLS.colWidthPx(BIG_W + 10);
+  var sheet = {
+    name: 'Замечания', freeze: 3,
+    cols: [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 12 }, { w: 28 }, { w: 36 },
+    { w: pw }, { w: pw }, { w: pw }],
+    rows: rows, merges: merges, rowHeights: rh, images: images,
+    print: { landscape: true, titles: '$3:$3', foot: CFG.object + ' · замечания · ' + res.label }
+  };
+  try {
+    download(window.XLS.workbook([sheet]),
+      'Замечания_' + res.label.replace(/\s+/g, '_') + '_' + dateStamp() + '.xlsx');
+    toast('Готово: ' + res.rows.length + ' замечаний');
+  } catch (e) { alert('Не удалось собрать файл: ' + e.message); }
+}
+
 /* ---------- наряд бригаде: только этот обход ---------- */
 function exportNaryad() {
   var per = UI.nper || 'today', sel = UI.ncrew || 'all';
