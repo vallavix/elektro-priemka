@@ -324,7 +324,17 @@ function rec(bid, n, create) {
 function qOf(r, cid) { return (r && r.q && r.q[cid]) || 0; }
 /* когда последний раз трогали приёмку этой квартиры (подсчёт сюда не входит) */
 function touchIssue(r) { r.sts = Date.now(); r.ts = r.sts; }
-function issueTs(r) { return (r && (r.sts || r.ts)) || 0; }
+function issueTs(r) {
+  if (!r) return 0;
+  if (r.sts) return r.sts;
+  /* Старые записи: до разделения подсчёт двигал то же время. Если оно совпадает
+     с последним нажатием в подсчёте — про приёмку оно ничего не говорит. */
+  var lastQ = 0;
+  (r.lg || []).forEach(function (e) { if (e.t > lastQ) lastQ = e.t; });
+  if (r.qts && r.qts > lastQ) lastQ = r.qts;
+  if (lastQ && Math.abs(lastQ - (r.ts || 0)) < 120000) return 0;
+  return r.ts || 0;
+}
 function qTotal(r) {
   var s = 0;
   CFG.count.forEach(function (c) { s += qOf(r, c.id); });
@@ -532,9 +542,18 @@ function issueDays() {
   });
   return Object.keys(set).sort().reverse();
 }
+function issueSuffix() {
+  var bs = issueBuildings();
+  return bs.length === CFG.buildings.length ? '' : '_' + bs[0].name.replace(/\s+/g, '');
+}
+function issueBuildings() {
+  if (!UI.ib || UI.ib === 'all') return CFG.buildings;
+  var one = CFG.buildings.filter(function (b) { return b.id === UI.ib; });
+  return one.length ? one : CFG.buildings;
+}
 function issuesInPeriod(period, day) {
   var R = periodRange(period, day), out = [];
-  expBuildings().forEach(function (b) {
+  issueBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     allFlats(b).forEach(function (x) {
       var r = d[x.n], s = status(r);
@@ -960,7 +979,13 @@ function viewExport() {
       var ip = UI.iper || 'today', day = UI.iday || '';
       var res = issuesInPeriod(ip, day);
       var days = issueDays().slice(0, 14);
+      var ib = UI.ib || 'all';
       return '<div class="sec" style="margin-top:26px">Замечания за обход</div>' +
+        '<div class="tabs">' +
+        '<button class="tab ' + (ib === 'all' ? 'on' : '') + '" data-ib="all">Весь объект</button>' +
+        CFG.buildings.map(function (x) {
+          return '<button class="tab ' + (ib === x.id ? 'on' : '') + '" data-ib="' + x.id + '">' + h(x.name) + '</button>';
+        }).join('') + '</div>' +
         '<div class="tabs">' + Object.keys(PERIODS).map(function (k) {
           return '<button class="tab ' + (!day && ip === k ? 'on' : '') + '" data-iper="' + k + '">' + PERIODS[k].n + '</button>';
         }).join('') + '</div>' +
@@ -1246,6 +1271,9 @@ function bind() {
   app.querySelectorAll('[data-crew]').forEach(function (el) {
     el.onclick = function () { UI.crew = el.dataset.crew; vibr(6); save(); render(); };
   });
+  app.querySelectorAll('[data-ib]').forEach(function (el) {
+    el.onclick = function () { UI.ib = el.dataset.ib; save(); render(); };
+  });
   app.querySelectorAll('[data-iper]').forEach(function (el) {
     el.onclick = function () { UI.iper = el.dataset.iper; UI.iday = ''; save(); render(); };
   });
@@ -1293,7 +1321,7 @@ function bind() {
       /* журнал: кто и когда — из него собирается наряд по обходу */
       r.lg = r.lg || [];
       r.lg.push({ c: p[0], d: v - was, t: Date.now(), w: UI.crew });
-      r.ts = Date.now(); vibr(8); save(); render();
+      r.qts = Date.now(); vibr(8); save(); render();
     };
   });
   app.querySelectorAll('[data-c]').forEach(function (el) {
@@ -1481,7 +1509,7 @@ function bind() {
   var fix = document.getElementById('fix');
   if (fix) fix.oninput = function () {
     var r = rec(UI.b, VIEW.flat, true);
-    r.fix = fix.value; r.fixw = UI.crew; r.fixts = Date.now(); r.ts = Date.now(); save();
+    r.fix = fix.value; r.fixw = UI.crew; r.fixts = Date.now(); r.qts = Date.now(); save();
   };
 
   var left = document.getElementById('left');
@@ -1524,7 +1552,7 @@ function act(a, el) {
       save(); render(); break;
     case 'clearq':
       if (!confirm('Обнулить подсчёт по кв. ' + VIEW.flat + '?')) return;
-      r = rec(UI.b, VIEW.flat, true); r.q = {}; r.ts = Date.now(); save(); render();
+      r = rec(UI.b, VIEW.flat, true); r.q = {}; r.qts = Date.now(); save(); render();
       break;
     case 'settings': go('settings'); break;
     case 'pickb': pickBuilding(); break;
@@ -1608,8 +1636,9 @@ function pickPhoto(field) {
         cachePhoto(id, url);
         idb.put(id, url);
         var r = rec(UI.b, VIEW.flat, true), key = field || 'ph';
-        r[key] = r[key] || []; r[key].push(id); r.ts = Date.now();
-        if (key === 'fixph') { r.fixw = UI.crew; r.fixts = Date.now(); } else touchIssue(r);
+        r[key] = r[key] || []; r[key].push(id);
+        if (key === 'fixph') { r.fixw = UI.crew; r.fixts = Date.now(); r.qts = Date.now(); }
+        else touchIssue(r);
         save(); render();
       };
       img.src = fr.result;
@@ -2000,7 +2029,7 @@ function buildIssuesPeriod(res, IMG) {
   };
   try {
     download(window.XLS.workbook([sheet]),
-      'Замечания_' + res.label.replace(/\s+/g, '_') + '_' + dateStamp() + '.xlsx');
+      'Замечания_' + res.label.replace(/\s+/g, '_') + issueSuffix() + '_' + dateStamp() + '.xlsx');
     toast('Готово: ' + res.rows.length + ' замечаний');
   } catch (e) { alert('Не удалось собрать файл: ' + e.message); }
 }
