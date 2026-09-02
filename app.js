@@ -2009,19 +2009,20 @@ function exportIssuesPeriod() {
 function buildIssuesPeriod(res, IMG) {
   var C = window.colName, MAXPH = 3;
   var rows = [], merges = [], images = [], rh = {};
-  var lastCol = 6 + MAXPH;
+  var lastCol = 7 + MAXPH;
 
   rows.push([{ v: 'ЗАМЕЧАНИЯ — ' + res.label.toUpperCase(), s: 6 }]);
   merges.push('A1:' + C(lastCol) + '1');
   rows.push([{ v: CFG.object + ' · выгружено ' + dateStamp(), s: 3 }]);
   merges.push('A2:' + C(lastCol) + '2');
-  rows.push([{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: 'Тип', s: 1 },
-  { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 },
+  rows.push([{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: '№ на эт.', s: 1 },
+  { v: 'Тип', s: 1 }, { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 },
   { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]);
 
   res.rows.forEach(function (x) {
     var r = x.r, rowIdx = rows.length;
     var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
+    { v: flatsOf(x.b, x.f).indexOf(x.n) + 1, s: 2, n: true },
     { v: r.crit ? 'Критично' : 'Обычное', s: 2 }, { v: x.miss, s: 3 },
     { v: r.left || '', s: 3 }];
     for (var c = 0; c < MAXPH; c++) row.push({ v: '', s: 2 });
@@ -2029,7 +2030,7 @@ function buildIssuesPeriod(res, IMG) {
     (x.ph || []).slice(0, MAXPH).forEach(function (id, k) {
       var im = IMG[id];
       if (!im || !im.full) return;
-      images.push({ col: 6 + k, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, k) });
+      images.push({ col: 7 + k, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, k) });
       rh[rowIdx] = Math.max(rh[rowIdx] || 0, window.XLS.rowHeightPx(im.fh + 8));
     });
   });
@@ -2037,7 +2038,7 @@ function buildIssuesPeriod(res, IMG) {
   var pw = window.XLS.colWidthPx(BIG_W + 10);
   var sheet = {
     name: 'Замечания', freeze: 3,
-    cols: [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 12 }, { w: 28 }, { w: 36 },
+    cols: [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }, { w: 28 }, { w: 36 },
     { w: pw }, { w: pw }, { w: pw }],
     rows: rows, merges: merges, rowHeights: rh, images: images,
     print: { landscape: true, titles: '$3:$3', foot: CFG.object + ' · замечания · ' + res.label }
@@ -2074,7 +2075,8 @@ function buildNaryad(sets, IMG) {
   var sheets = [];
 
   sets.forEach(function (nd) {
-    var lastCol = 3 + nC + (withPrice ? 1 : 0);
+    var OFFN = 4;                                   /* Корпус, Этаж, № кв., № на эт. */
+    var lastCol = OFFN + nC + (withPrice ? 1 : 0);
     var rows = [], merges = [];
 
     rows.push([{ v: 'НАРЯД — ' + nd.crew.toUpperCase(), s: 6 }]);
@@ -2083,12 +2085,12 @@ function buildNaryad(sets, IMG) {
     merges.push('A2:' + C(lastCol) + '2');
 
     /* строки 3-4: разделы подсчёта над названиями позиций */
-    var r3 = [{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }];
-    var r4 = [{ v: '', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }];
-    ['A', 'B', 'C'].forEach(function (col) { merges.push(col + '3:' + col + '4'); });
+    var r3 = [{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: '№ на эт.', s: 1 }];
+    var r4 = [{ v: '', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }];
+    ['A', 'B', 'C', 'D'].forEach(function (col) { merges.push(col + '3:' + col + '4'); });
     var i = 0;
     while (i < nC) {
-      var c = CFG.count[i], col = 3 + i;
+      var c = CFG.count[i], col = OFFN + i;
       if (!c.g) {
         r3[col] = { v: c.n, s: 1 }; r4[col] = { v: '', s: 1 };
         merges.push(C(col) + '3:' + C(col) + '4');
@@ -2097,13 +2099,13 @@ function buildNaryad(sets, IMG) {
         var j = i;
         while (j < nC && CFG.count[j].g === c.g) j++;
         r3[col] = { v: c.g, s: 1 };
-        for (var k = i + 1; k < j; k++) r3[3 + k] = { v: '', s: 1 };
-        for (var k2 = i; k2 < j; k2++) r4[3 + k2] = { v: CFG.count[k2].n, s: 1 };
-        merges.push(C(col) + '3:' + C(3 + j - 1) + '3');
+        for (var k = i + 1; k < j; k++) r3[OFFN + k] = { v: '', s: 1 };
+        for (var k2 = i; k2 < j; k2++) r4[OFFN + k2] = { v: CFG.count[k2].n, s: 1 };
+        merges.push(C(col) + '3:' + C(OFFN + j - 1) + '3');
         i = j;
       }
     }
-    var cTot = 3 + nC;
+    var cTot = OFFN + nC;
     r3[cTot] = { v: 'Всего шт.', s: 1 }; r4[cTot] = { v: '', s: 1 };
     merges.push(C(cTot) + '3:' + C(cTot) + '4');
     if (withPrice) {
@@ -2115,7 +2117,8 @@ function buildNaryad(sets, IMG) {
     nd.rows.sort(function (a, z) {
       return a.b.name.localeCompare(z.b.name) || a.f - z.f || a.n - z.n;
     }).forEach(function (x) {
-      var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true }];
+      var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
+      { v: flatsOf(x.b, x.f).indexOf(x.n) + 1, s: 2, n: true }];
       CFG.count.forEach(function (c) {
         row.push(x.per[c.id] ? { v: x.per[c.id], s: 2, n: true } : { v: '', s: 2 });
       });
@@ -2124,14 +2127,14 @@ function buildNaryad(sets, IMG) {
       rows.push(row);
     });
 
-    var trow = [{ v: 'ИТОГО', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }];
+    var trow = [{ v: 'ИТОГО', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }, { v: '', s: 1 }];
     CFG.count.forEach(function (c) { trow.push({ v: nd.totals[c.id] || 0, s: 1, n: true }); });
     trow.push({ v: nd.grand, s: 1, n: true });
     if (withPrice) trow.push({ v: Math.round(nd.money), s: 1, n: true });
     rows.push(trow);
-    merges.push('A' + rows.length + ':C' + rows.length);
+    merges.push('A' + rows.length + ':D' + rows.length);
 
-    var cols = [{ w: 13 }, { w: 7 }, { w: 8 }];
+    var cols = [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 9 }];
     CFG.count.forEach(function () { cols.push({ w: 13 }); });
     cols.push({ w: 11 });
     if (withPrice) cols.push({ w: 13 });
@@ -2145,7 +2148,8 @@ function buildNaryad(sets, IMG) {
   /* лист «Что переделать»: то, что отмечено в подсчёте, со своими фото */
   var MAXF = 3;
   var ir = [[{ v: 'Бригада', s: 1 }, { v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 },
-  { v: 'Что переделать', s: 1 }, { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]];
+  { v: '№ на эт.', s: 1 }, { v: 'Что переделать', s: 1 },
+  { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]];
   var images = [], rh = {}, seen = {};
   sets.forEach(function (nd) {
     nd.rows.forEach(function (x) {
@@ -2156,13 +2160,14 @@ function buildNaryad(sets, IMG) {
       seen[key] = 1;
       var rowIdx = ir.length;
       var row = [{ v: nd.crew, s: 3 }, { v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true },
-      { v: x.n, s: 2, n: true }, { v: r.fix || '', s: 3 }];
+      { v: x.n, s: 2, n: true }, { v: flatsOf(x.b, x.f).indexOf(x.n) + 1, s: 2, n: true },
+      { v: r.fix || '', s: 3 }];
       for (var c = 0; c < MAXF; c++) row.push({ v: '', s: 2 });
       ir.push(row);
       ph.forEach(function (id, k) {
         var im = IMG[id];
         if (!im || !im.full) return;
-        images.push({ col: 5 + k, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh,
+        images.push({ col: 6 + k, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh,
           name: photoName(x.b, x, k) });
         rh[rowIdx] = Math.max(rh[rowIdx] || 0, window.XLS.rowHeightPx(im.fh + 8));
       });
@@ -2172,7 +2177,7 @@ function buildNaryad(sets, IMG) {
     var pw = window.XLS.colWidthPx(BIG_W + 10);
     sheets.push({
       name: 'Что переделать',
-      cols: [{ w: 15 }, { w: 13 }, { w: 7 }, { w: 8 }, { w: 40 }, { w: pw }, { w: pw }, { w: pw }],
+      cols: [{ w: 15 }, { w: 13 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 40 }, { w: pw }, { w: pw }, { w: pw }],
       rows: ir, merges: [], rowHeights: rh, images: images, freeze: 1,
       print: { landscape: true, titles: '$1:$1', foot: CFG.object + ' · что переделать' }
     });
