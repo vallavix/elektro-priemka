@@ -1013,18 +1013,18 @@ function viewExport() {
         '<div class="prog-cnt">критичных: ' +
         res.rows.filter(function (x) { return x.r.crit; }).length + '</div></div></div>' +
         '<button class="btn btn-primary" data-act="issueshtml"' + (res.rows.length ? '' : ' disabled') + '>' +
-        I.msg + ' Отчёт для прораба (.html)</button>' +
-        '<div class="hint">Открывается двойным кликом в браузере. Одно замечание — один блок: сверху корпус, ' +
+        I.msg + ' Замечания с фото (.html)</button>' +
+        '<div class="hint">Чтобы прораб смотрел на компе. Одно замечание — один блок: сверху корпус, ' +
         'этаж и номер квартиры, под ними фото целиком. Есть поиск по номеру и кнопки «только критичные» ' +
-        'и по корпусам. Клик по фото — во весь экран. Интернет не нужен, снимки лежат внутри файла.</div>' +
+        'и по корпусам, клик по фото — во весь экран. Интернет не нужен, снимки лежат внутри файла.</div>' +
         '<button class="btn btn-ghost" data-act="issuespdf"' + (res.rows.length ? '' : ' disabled') + '>' +
-        I.file + ' Альбом на печать (.pdf)</button>' +
-        '<div class="hint">Одно фото — одна страница А4 с шапкой «Корпус · Этаж · Кв.». Листается PgDn, ' +
-        'ничего не скачет и не обрезается. Это же отдать бригаде на бумаге.</div>' +
+        I.file + ' Замечания с фото (.pdf)</button>' +
+        '<div class="hint">То же самое, но на печать: одно фото — одна страница А4 с шапкой ' +
+        '«Корпус · Этаж · Кв.». Отдать бригаде на бумаге.</div>' +
         '<button class="btn btn-ghost" data-act="issuesx"' + (res.rows.length ? '' : ' disabled') + '>' +
-        I.file + ' Таблица замечаний (.xlsx)</button>' +
-        '<div class="hint">Тот же список таблицей — для стройконтроля и для тех, кому надо править. ' +
-        'Смотреть по нему фото неудобно: снимок режется границей ячейки.</div>';
+        I.file + ' Замечания списком (.xlsx)</button>' +
+        '<div class="hint">Таблица без фотографий — для стройконтроля и для тех, кому надо править. ' +
+        'В колонке «Фото, шт.» видно, по каким квартирам снимки есть в двух файлах выше.</div>';
     })() +
 
     /* ---- наряд по обходу ---- */
@@ -1674,11 +1674,36 @@ function pickPhoto(field) {
   inp.click();
 }
 
-/* ---------- сохранение файла ---------- */
-function download(blob, name) {
+/* ---------- сохранение файла ----------
+   На айфоне <a download> не сохраняет файл, а открывает его во вкладке, и «Поделиться»
+   отдаёт бесполезную ссылку blob:… Поэтому на телефоне сначала пробуем системный
+   «Поделиться» с настоящим файлом — оттуда он уходит в Telegram, почту и «Файлы». */
+function canShareFiles(file) {
+  try {
+    return !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] }));
+  } catch (e) { return false; }
+}
+function saveAs(blob, name) {
   var url = URL.createObjectURL(blob), a = document.createElement('a');
   a.href = url; a.download = name; document.body.appendChild(a); a.click();
   setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 3000);
+}
+function download(blob, name) {
+  var touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  if (touch) {
+    var file = null;
+    try { file = new File([blob], name, { type: blob.type || 'application/octet-stream' }); }
+    catch (e) { file = null; }
+    if (file && canShareFiles(file)) {
+      navigator.share({ files: [file], title: name }).catch(function (err) {
+        /* «Отмена» — это не сбой, второй раз файл не навязываем */
+        if (err && err.name === 'AbortError') return;
+        saveAs(blob, name);
+      });
+      return;
+    }
+  }
+  saveAs(blob, name);
 }
 function dataUrlToBytes(url) {
   if (!url || url.indexOf(',') < 0) return null;
@@ -2005,22 +2030,18 @@ function buildXlsx(IMG) {
     toast('Шахматка выгружена');
   } catch (e) { alert('Не удалось собрать файл: ' + e.message); }
 }
-/* ---------- замечания одного обхода ---------- */
+/* ---------- замечания одного обхода: таблица без фото ----------
+   Снимки сюда не кладём: в ячейке фото обрезается по её границе, а строки разной
+   высоты дёргают прокрутку. Смотреть замечания с фото — отчёт .html и альбом .pdf,
+   эта таблица нужна для стройконтроля и правок. */
 function exportIssuesPeriod() {
   var res = issuesInPeriod(UI.iper || 'today', UI.iday || '');
   if (!res.rows.length) { toast('За этот день замечаний нет'); return; }
-  var ids = [];
-  res.rows.forEach(function (x) {
-    (x.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
-  });
-  if (ids.length) toast('Готовлю снимки…');
-  preparePhotos(ids).then(function (IMG) { buildIssuesPeriod(res, IMG); })
-    .catch(function () { buildIssuesPeriod(res, {}); });
+  buildIssuesPeriod(res);
 }
-function buildIssuesPeriod(res, IMG) {
-  var C = window.colName, MAXPH = 3;
-  var rows = [], merges = [], images = [], rh = {};
-  var lastCol = 7 + MAXPH;
+function buildIssuesPeriod(res) {
+  var C = window.colName;
+  var rows = [], merges = [], lastCol = 7;
 
   rows.push([{ v: 'ЗАМЕЧАНИЯ — ' + res.label.toUpperCase(), s: 6 }]);
   merges.push('A1:' + C(lastCol) + '1');
@@ -2028,30 +2049,21 @@ function buildIssuesPeriod(res, IMG) {
   merges.push('A2:' + C(lastCol) + '2');
   rows.push([{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: '№ на эт.', s: 1 },
   { v: 'Тип', s: 1 }, { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 },
-  { v: 'Фото 1', s: 1 }, { v: 'Фото 2', s: 1 }, { v: 'Фото 3', s: 1 }]);
+  { v: 'Фото, шт.', s: 1 }]);
 
   res.rows.forEach(function (x) {
-    var r = x.r, rowIdx = rows.length;
-    var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
+    var r = x.r;
+    rows.push([{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
     { v: flatsOf(x.b, x.f).indexOf(x.n) + 1, s: 2, n: true },
     { v: r.crit ? 'Критично' : 'Обычное', s: 2 }, { v: x.miss, s: 3 },
-    { v: r.left || '', s: 3 }];
-    for (var c = 0; c < MAXPH; c++) row.push({ v: '', s: 2 });
-    rows.push(row);
-    (x.ph || []).slice(0, MAXPH).forEach(function (id, k) {
-      var im = IMG[id];
-      if (!im || !im.full) return;
-      images.push({ col: 7 + k, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, k) });
-      rh[rowIdx] = Math.max(rh[rowIdx] || 0, window.XLS.rowHeightPx(im.fh + 8));
-    });
+    { v: r.left || '', s: 3 },
+    { v: (x.ph || []).length || '', s: 2, n: !!(x.ph || []).length }]);
   });
 
-  var pw = window.XLS.colWidthPx(BIG_W + 10);
   var sheet = {
     name: 'Замечания', freeze: 3,
-    cols: [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }, { w: 28 }, { w: 36 },
-    { w: pw }, { w: pw }, { w: pw }],
-    rows: rows, merges: merges, rowHeights: rh, images: images,
+    cols: [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }, { w: 30 }, { w: 46 }, { w: 10 }],
+    rows: rows, merges: merges,
     print: { landscape: true, titles: '$3:$3', foot: CFG.object + ' · замечания · ' + res.label }
   };
   try {
