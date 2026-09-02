@@ -505,7 +505,8 @@ function naryad(period, crew) {
       grand += sum; gmoney += money2;
       out.push({
         b: b, f: x.f, n: x.n, per: per, sum: sum, money: money2, last: last,
-        crews: Object.keys(crews).map(crewName).join(', '), r: r
+        crews: Object.keys(crews).map(crewName).join(', '), r: r,
+        fixph: photosInRange(r.fixph, from, to)
       });
     });
   });
@@ -546,6 +547,19 @@ function issueSuffix() {
   var bs = issueBuildings();
   return bs.length === CFG.buildings.length ? '' : '_' + bs[0].name.replace(/\s+/g, '');
 }
+/* В номере снимка зашито время съёмки: ph<13 цифр><случайные буквы>.
+   Значит можно взять только те фото, что сняты в выбранный день. */
+function phTime(id) {
+  var m = /^ph(\d{13})/.exec(String(id || ''));
+  return m ? +m[1] : 0;
+}
+function photosInRange(list, from, to) {
+  if (from <= 0 && to === Infinity) return (list || []).slice();
+  return (list || []).filter(function (id) {
+    var t = phTime(id);
+    return t && t >= from && t < to;
+  });
+}
 function issueBuildings() {
   if (!UI.ib || UI.ib === 'all') return CFG.buildings;
   var one = CFG.buildings.filter(function (b) { return b.id === UI.ib; });
@@ -562,11 +576,12 @@ function issuesInPeriod(period, day) {
       if (t < R.from || t >= R.to) return;
       var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
         .map(function (p) { return p.n; }).join(', ');
-      out.push({ b: b, f: x.f, n: x.n, r: r, miss: miss, ts: t });
+      out.push({ b: b, f: x.f, n: x.n, r: r, miss: miss, ts: t,
+        ph: photosInRange(r.ph, R.from, R.to) });
     });
   });
   out.sort(function (a, z) { return a.b.name.localeCompare(z.b.name) || a.f - z.f || a.n - z.n; });
-  return { rows: out, label: R.n };
+  return { rows: out, label: R.n, from: R.from, to: R.to };
 }
 function status(r) {
   if (!r) return 'new';
@@ -1985,7 +2000,7 @@ function exportIssuesPeriod() {
   if (!res.rows.length) { toast('За этот день замечаний нет'); return; }
   var ids = [];
   res.rows.forEach(function (x) {
-    (x.r.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+    (x.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
   });
   if (ids.length) toast('Готовлю снимки…');
   preparePhotos(ids).then(function (IMG) { buildIssuesPeriod(res, IMG); })
@@ -2011,7 +2026,7 @@ function buildIssuesPeriod(res, IMG) {
     { v: r.left || '', s: 3 }];
     for (var c = 0; c < MAXPH; c++) row.push({ v: '', s: 2 });
     rows.push(row);
-    (r.ph || []).slice(0, MAXPH).forEach(function (id, k) {
+    (x.ph || []).slice(0, MAXPH).forEach(function (id, k) {
       var im = IMG[id];
       if (!im || !im.full) return;
       images.push({ col: 6 + k, row: rowIdx, data: im.full, wpx: im.fw, hpx: im.fh, name: photoName(x.b, x, k) });
@@ -2046,7 +2061,7 @@ function exportNaryad() {
   var ids = [];
   sets.forEach(function (nd) {
     nd.rows.forEach(function (x) {
-      (x.r.fixph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+      (x.fixph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
     });
   });
   if (ids.length) toast('Готовлю наряд…');
@@ -2136,7 +2151,7 @@ function buildNaryad(sets, IMG) {
     nd.rows.forEach(function (x) {
       var key = x.b.id + '_' + x.n;
       if (seen[key]) return;
-      var r = x.r, ph = (r.fixph || []).slice(0, MAXF);
+      var r = x.r, ph = (x.fixph || []).slice(0, MAXF);
       if (!r.fix && !ph.length) return;
       seen[key] = 1;
       var rowIdx = ir.length;
