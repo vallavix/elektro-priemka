@@ -1,6 +1,6 @@
 /* Офлайн-кэш. При правках файлов поднимай версию — иначе телефон отдаст старое. */
-var V = 'ep-v22';
-var FILES = ['./', './index.html', './app.css', './app.js', './xlsx.js',
+var V = 'ep-v23';
+var FILES = ['./', './index.html', './app.css', './app.js', './xlsx.js', './report.js',
   './manifest.json', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', function (e) {

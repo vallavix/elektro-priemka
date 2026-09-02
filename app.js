@@ -1012,10 +1012,19 @@ function viewExport() {
         '<div class="prog-num">' + res.rows.length + '</div></div>' +
         '<div class="prog-cnt">критичных: ' +
         res.rows.filter(function (x) { return x.r.crit; }).length + '</div></div></div>' +
-        '<button class="btn btn-primary" data-act="issuesx"' + (res.rows.length ? '' : ' disabled') + '>' +
-        I.msg + ' Скачать замечания за обход</button>' +
-        '<div class="hint">Только те квартиры, где отметки приёмки ставились в выбранный день — чтобы отдать список ' +
-        'по сегодняшнему обходу, а не по всему дому. Фотографии идут в тех же строках.</div>';
+        '<button class="btn btn-primary" data-act="issueshtml"' + (res.rows.length ? '' : ' disabled') + '>' +
+        I.msg + ' Отчёт для прораба (.html)</button>' +
+        '<div class="hint">Открывается двойным кликом в браузере. Одно замечание — один блок: сверху корпус, ' +
+        'этаж и номер квартиры, под ними фото целиком. Есть поиск по номеру и кнопки «только критичные» ' +
+        'и по корпусам. Клик по фото — во весь экран. Интернет не нужен, снимки лежат внутри файла.</div>' +
+        '<button class="btn btn-ghost" data-act="issuespdf"' + (res.rows.length ? '' : ' disabled') + '>' +
+        I.file + ' Альбом на печать (.pdf)</button>' +
+        '<div class="hint">Одно фото — одна страница А4 с шапкой «Корпус · Этаж · Кв.». Листается PgDn, ' +
+        'ничего не скачет и не обрезается. Это же отдать бригаде на бумаге.</div>' +
+        '<button class="btn btn-ghost" data-act="issuesx"' + (res.rows.length ? '' : ' disabled') + '>' +
+        I.file + ' Таблица замечаний (.xlsx)</button>' +
+        '<div class="hint">Тот же список таблицей — для стройконтроля и для тех, кому надо править. ' +
+        'Смотреть по нему фото неудобно: снимок режется границей ячейки.</div>';
     })() +
 
     /* ---- наряд по обходу ---- */
@@ -1613,6 +1622,8 @@ function act(a, el) {
 
     case 'naryad': exportNaryad(); break;
     case 'issuesx': exportIssuesPeriod(); break;
+    case 'issueshtml': exportReport('html'); break;
+    case 'issuespdf': exportReport('pdf'); break;
     case 'xlsx': exportXlsx(); break;
     case 'photozip': exportPhotos(); break;
     case 'backup': backup(); break;
@@ -2048,6 +2059,92 @@ function buildIssuesPeriod(res, IMG) {
       'Замечания_' + res.label.replace(/\s+/g, '_') + issueSuffix() + '_' + dateStamp() + '.xlsx');
     toast('Готово: ' + res.rows.length + ' замечаний');
   } catch (e) { alert('Не удалось собрать файл: ' + e.message); }
+}
+
+/* ---------- отчёт по обходу: смотреть, а не сводить ----------
+   Excel годится, чтобы отдать список в стройконтроль, но смотреть по нему фото
+   нельзя: снимок обрезается границей ячейки, а строки разной высоты дёргают
+   прокрутку. Поэтому те же данные отдаём вторым видом — одно замечание на экран
+   (HTML) или на страницу А4 (PDF). */
+var REP_MAX = 1200;   // px — снимок в отчёте: хватает, чтобы приблизить, и не раздувает файл
+
+function prepareReportPhotos(ids) {
+  var out = {}, i = 0;
+  function step() {
+    if (i >= ids.length) return Promise.resolve(out);
+    var id = ids[i++];
+    return getPhoto(id).then(function (url) {
+      if (!url) return step();
+      return loadImg(url).then(function (img) {
+        var cv = document.createElement('canvas');
+        var s = fit(img.width, img.height, REP_MAX, REP_MAX);
+        cv.width = s.w; cv.height = s.h;
+        var g2 = cv.getContext('2d');
+        g2.imageSmoothingQuality = 'high';
+        g2.drawImage(img, 0, 0, s.w, s.h);
+        var durl = cv.toDataURL('image/jpeg', 0.78);
+        /* для PDF нужен уже декодированный кадр — рисуем его на страницу */
+        return loadImg(durl).then(function (ready) {
+          out[id] = { url: durl, img: ready };
+          return step();
+        });
+      });
+    }).catch(function () { return step(); });
+  }
+  return step();
+}
+
+function reportItems(res, PH) {
+  return res.rows.map(function (x) {
+    var ph = (x.ph || []).map(function (id) { return PH[id]; }).filter(Boolean);
+    return {
+      b: x.b.name, f: x.f, n: x.n, crit: !!x.r.crit,
+      miss: x.miss, left: x.r.left || '', photos: ph
+    };
+  });
+}
+
+function exportReport(kind) {
+  var res = issuesInPeriod(UI.iper || 'today', UI.iday || '');
+  if (!res.rows.length) { toast('За этот день замечаний нет'); return; }
+  var ids = [];
+  res.rows.forEach(function (x) {
+    (x.ph || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+  });
+  toast(ids.length ? 'Готовлю ' + ids.length + ' фото…' : 'Собираю отчёт…');
+  prepareReportPhotos(ids).then(function (PH) {
+    var items = reportItems(res, PH);
+    var base = 'Замечания_' + res.label.replace(/\s+/g, '_') + issueSuffix() + '_' + dateStamp();
+    if (kind === 'html') {
+      var doc = window.REPORT.html(items.map(function (it) {
+        return {
+          b: it.b, f: it.f, n: it.n, crit: it.crit, miss: it.miss, left: it.left,
+          photos: it.photos.map(function (p) { return p.url; })
+        };
+      }), { object: CFG.object, label: res.label, date: dateStamp() });
+      download(new Blob([doc], { type: 'text/html;charset=utf-8' }), base + '.html');
+      toast('Отчёт готов: ' + items.length + ' замечаний');
+      return;
+    }
+    /* PDF: квартира с тремя фото даёт три страницы — на каждой свой снимок целиком */
+    var pages = [];
+    items.forEach(function (it) {
+      var a = window.REPORT.addr(it);
+      if (!it.photos.length) {
+        pages.push({ addr: a, crit: it.crit, miss: it.miss, left: it.left, img: null, cap: 'без фото' });
+        return;
+      }
+      it.photos.forEach(function (p, k) {
+        pages.push({
+          addr: a, crit: it.crit, miss: it.miss, left: it.left, img: p.img,
+          cap: it.photos.length > 1 ? 'фото ' + (k + 1) + ' из ' + it.photos.length : ''
+        });
+      });
+    });
+    download(window.REPORT.pdf(pages, CFG.object + ' · ' + res.label + ' · ' + dateStamp()),
+      base + '.pdf');
+    toast('Альбом готов: ' + pages.length + ' стр.');
+  }).catch(function (e) { alert('Не удалось собрать отчёт: ' + e.message); });
 }
 
 /* ---------- наряд бригаде: только этот обход ---------- */
