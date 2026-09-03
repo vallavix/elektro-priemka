@@ -503,14 +503,23 @@ function naryad(period, crew) {
         totals[c.id] = (totals[c.id] || 0) + (per[c.id] || 0);
       });
       grand += sum; gmoney += money2;
+      /* «Что переделать» пишется на квартиру, а не на обход: следующая бригада
+         зайдёт в ту же квартиру — и в её наряд утянется чужая старая запись.
+         Поэтому берём приписку, только если её оставила эта же бригада и в этот
+         же период. У записей до появления fixts время берём от самой квартиры. */
+      var ft = r.fixts || r.ts || 0;
+      var mine = (crew === 'all' || (r.fixw || '?') === crew) && ft >= from && ft < to;
       out.push({
         b: b, f: x.f, n: x.n, per: per, sum: sum, money: money2, last: last,
         crews: Object.keys(crews).map(crewName).join(', '), r: r,
-        fixph: photosInRange(r.fixph, from, to)
+        fix: mine ? (r.fix || '') : '',
+        fixph: mine ? photosInRange(r.fixph, from, to) : []
       });
     });
   });
-  return { rows: out, totals: totals, grand: grand, money: gmoney, period: P.n, crew: crew === 'all' ? 'все бригады' : crewName(crew) };
+  return { rows: out, totals: totals, grand: grand, money: gmoney, period: P.n,
+    crewId: crew, from: from, to: to,
+    crew: crew === 'all' ? 'все бригады' : crewName(crew) };
 }
 function money(v) {
   return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
@@ -2328,12 +2337,12 @@ function buildNaryad(sets, IMG) {
       var key = x.b.id + '_' + x.n;
       if (seen[key]) return;
       var r = x.r, ph = (x.fixph || []).slice(0, MAXF);
-      if (!r.fix && !ph.length) return;
+      if (!x.fix && !ph.length) return;
       seen[key] = 1;
       var rowIdx = ir.length;
       var row = [{ v: nd.crew, s: 3 }, { v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true },
       { v: x.n, s: 2, n: true }, { v: flatsOf(x.b, x.f).indexOf(x.n) + 1, s: 2, n: true },
-      { v: r.fix || '', s: 3 }];
+      { v: x.fix || '', s: 3 }];
       for (var c = 0; c < MAXF; c++) row.push({ v: '', s: 2 });
       ir.push(row);
       ph.forEach(function (id, k) {
