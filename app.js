@@ -1031,7 +1031,19 @@ function viewExport() {
     (function () {
       var per = UI.nper || 'today', nc = UI.ncrew || 'all';
       var nd = naryad(per, nc);
+      /* Наряд собирается по фильтру «Что выгружать» вверху экрана. Он далеко от
+         этого блока, поэтому пишем прямо здесь, за какой корпус сейчас наряд,
+         и если тут пусто — сколько бы вышло по всему объекту. */
+      var nbs = expBuildings();
+      var nWhere = nbs.length === CFG.buildings.length ? 'весь объект' : nbs[0].name;
+      var allB = null;
+      if (!nd.grand && nbs.length !== CFG.buildings.length) {
+        var keepB = UI.expB; UI.expB = 'all';
+        allB = naryad(per, nc); UI.expB = keepB;
+      }
       return '<div class="sec" style="margin-top:26px">Наряд по обходу</div>' +
+        '<div class="hint" style="margin-top:-6px">Считается по выбору «Что выгружать» вверху экрана — сейчас ' +
+        h(nWhere) + '.</div>' +
         '<div class="tabs">' + Object.keys(PERIODS).map(function (k) {
           return '<button class="tab ' + (per === k ? 'on' : '') + '" data-per="' + k + '">' + PERIODS[k].n + '</button>';
         }).join('') + '</div>' +
@@ -1049,6 +1061,9 @@ function viewExport() {
         (nd.grand ? '<div class="qrow">' + CFG.count.map(function (c) {
           return nd.totals[c.id] ? '<span class="qchip"><b>' + nd.totals[c.id] + '</b>' + h(c.n) + '</span>' : '';
         }).join('') + '</div>' : '') + '</div>' +
+        (allB && allB.grand ? '<div class="hint" style="color:var(--bad)">В «' + h(nWhere) +
+          '» за этот период у бригады пусто, а по всему объекту — ' + allB.grand +
+          ' шт. Переключи «Что выгружать» наверху на «Весь объект».</div>' : '') +
         '<button class="btn btn-primary" data-act="naryad"' + (nd.grand ? '' : ' disabled') + '>' +
         I.file + ' Скачать наряд' + '</button>' +
         '<div class="hint">Только то, что отмечено на вкладке «Подсчёт» за выбранный период — чтобы отдать бригаде именно её обход, а не весь дом. ' +
