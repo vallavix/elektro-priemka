@@ -543,6 +543,16 @@ function issueDays() {
   });
   return Object.keys(set).sort().reverse();
 }
+/* Что писать в файле замечаний: список непринятых пунктов, ручная приписка
+   «что осталось», или оба. Выбирается на вкладке «Выгрузка». */
+function issueText(x) {
+  var m = UI.itxt || 'both';
+  return { miss: m === 'left' ? '' : (x.miss || ''), left: m === 'miss' ? '' : (x.r.left || '') };
+}
+function issueTextSuffix() {
+  var m = UI.itxt || 'both';
+  return m === 'miss' ? '_невыполнено' : m === 'left' ? '_осталось' : '';
+}
 function issueSuffix() {
   var bs = expBuildings();
   return bs.length === CFG.buildings.length ? '' : '_' + bs[0].name.replace(/\s+/g, '');
@@ -1016,6 +1026,11 @@ function viewExport() {
         '<div class="tabs">' + perList.map(function (o) {
           return '<button class="tab ' + (!day && ip === o.v ? 'on' : '') + '" data-iper="' + o.v + '">' + h(o.n) + '</button>';
         }).join('') + '</div>' +
+        '<div class="xp-fl">Что писать в файле</div>' +
+        pills('itxt', [{ v: 'both', n: 'И то и то' }, { v: 'miss', n: 'Не выполнено' },
+          { v: 'left', n: 'Что осталось' }], UI.itxt || 'both') +
+        '<div class="hint" style="margin-top:-6px">«Не выполнено» — пункты, отмеченные крестом в чек-листе. ' +
+        '«Что осталось» — то, что дописал руками. Выбор действует на все три файла ниже.</div>' +
         (days.length > 1 ? '<div class="xp-fl">Или конкретный день</div><div class="tabs">' + days.map(function (dd) {
           return '<button class="tab ' + (day === dd ? 'on' : '') + '" data-iday="' + dd + '">' + dayLabel(dd) + '</button>';
         }).join('') + '</div>' : '') +
@@ -1329,6 +1344,9 @@ function bind() {
   });
   app.querySelectorAll('[data-crew]').forEach(function (el) {
     el.onclick = function () { UI.crew = el.dataset.crew; vibr(6); save(); render(); };
+  });
+  app.querySelectorAll('[data-itxt]').forEach(function (el) {
+    el.onclick = function () { UI.itxt = el.dataset.itxt; save(); render(); };
   });
   app.querySelectorAll('[data-iper]').forEach(function (el) {
     el.onclick = function () { UI.iper = el.dataset.iper; UI.iday = ''; save(); render(); };
@@ -2073,34 +2091,46 @@ function exportIssuesPeriod() {
 }
 function buildIssuesPeriod(res) {
   var C = window.colName;
-  var rows = [], merges = [], lastCol = 7;
+  /* Ненужную колонку не оставляем пустой, а выкидываем: лист узкий, его печатают. */
+  var mode = UI.itxt || 'both';
+  var withMiss = mode !== 'left', withLeft = mode !== 'miss';
+  var rows = [], merges = [], lastCol = 5 + (withMiss ? 1 : 0) + (withLeft ? 1 : 0);
 
   rows.push([{ v: 'ЗАМЕЧАНИЯ — ' + res.label.toUpperCase(), s: 6 }]);
   merges.push('A1:' + C(lastCol) + '1');
   rows.push([{ v: CFG.object + ' · выгружено ' + dateStamp(), s: 3 }]);
   merges.push('A2:' + C(lastCol) + '2');
-  rows.push([{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: '№ на эт.', s: 1 },
-  { v: 'Тип', s: 1 }, { v: 'Не выполнено', s: 1 }, { v: 'Что осталось', s: 1 },
-  { v: 'Фото, шт.', s: 1 }]);
+  var head = [{ v: 'Корпус', s: 1 }, { v: 'Этаж', s: 1 }, { v: '№ кв.', s: 1 }, { v: '№ на эт.', s: 1 },
+  { v: 'Тип', s: 1 }];
+  if (withMiss) head.push({ v: 'Не выполнено', s: 1 });
+  if (withLeft) head.push({ v: 'Что осталось', s: 1 });
+  head.push({ v: 'Фото, шт.', s: 1 });
+  rows.push(head);
 
   res.rows.forEach(function (x) {
-    var r = x.r;
-    rows.push([{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
+    var r = x.r, t = issueText(x);
+    var row = [{ v: x.b.name, s: 3 }, { v: x.f, s: 2, n: true }, { v: x.n, s: 2, n: true },
     { v: flatsOf(x.b, x.f).indexOf(x.n) + 1, s: 2, n: true },
-    { v: r.crit ? 'Критично' : 'Обычное', s: 2 }, { v: x.miss, s: 3 },
-    { v: r.left || '', s: 3 },
-    { v: (x.ph || []).length || '', s: 2, n: !!(x.ph || []).length }]);
+    { v: r.crit ? 'Критично' : 'Обычное', s: 2 }];
+    if (withMiss) row.push({ v: t.miss, s: 3 });
+    if (withLeft) row.push({ v: t.left, s: 3 });
+    row.push({ v: (x.ph || []).length || '', s: 2, n: !!(x.ph || []).length });
+    rows.push(row);
   });
 
+  var cols = [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }];
+  if (withMiss) cols.push({ w: 30 });
+  if (withLeft) cols.push({ w: 46 });
+  cols.push({ w: 10 });
   var sheet = {
     name: 'Замечания', freeze: 3,
-    cols: [{ w: 13 }, { w: 7 }, { w: 8 }, { w: 9 }, { w: 12 }, { w: 30 }, { w: 46 }, { w: 10 }],
+    cols: cols,
     rows: rows, merges: merges,
     print: { landscape: true, titles: '$3:$3', foot: CFG.object + ' · замечания · ' + res.label }
   };
   try {
     download(window.XLS.workbook([sheet]),
-      'Замечания_' + res.label.replace(/\s+/g, '_') + issueSuffix() + '_' + dateStamp() + '.xlsx');
+      'Замечания_' + res.label.replace(/\s+/g, '_') + issueSuffix() + issueTextSuffix() + '_' + dateStamp() + '.xlsx');
     toast('Готово: ' + res.rows.length + ' замечаний');
   } catch (e) { alert('Не удалось собрать файл: ' + e.message); }
 }
@@ -2141,9 +2171,10 @@ function prepareReportPhotos(ids) {
 function reportItems(res, PH) {
   return res.rows.map(function (x) {
     var ph = (x.ph || []).map(function (id) { return PH[id]; }).filter(Boolean);
+    var t = issueText(x);
     return {
       b: x.b.name, f: x.f, n: x.n, crit: !!x.r.crit,
-      miss: x.miss, left: x.r.left || '', photos: ph
+      miss: t.miss, left: t.left, photos: ph
     };
   });
 }
@@ -2158,7 +2189,7 @@ function exportReport(kind) {
   toast(ids.length ? 'Готовлю ' + ids.length + ' фото…' : 'Собираю отчёт…');
   prepareReportPhotos(ids).then(function (PH) {
     var items = reportItems(res, PH);
-    var base = 'Замечания_' + res.label.replace(/\s+/g, '_') + issueSuffix() + '_' + dateStamp();
+    var base = 'Замечания_' + res.label.replace(/\s+/g, '_') + issueSuffix() + issueTextSuffix() + '_' + dateStamp();
     if (kind === 'html') {
       var doc = window.REPORT.html(items.map(function (it) {
         return {
