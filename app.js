@@ -120,6 +120,50 @@ function mergeNotes() {
   return moved;
 }
 
+/* «Что переделать» раньше было одно на квартиру. Но в квартиру заходит не одна
+   бригада: Стас вешал светильники, следом Бехруз ставил розетки — и приписка
+   Стаса показывалась Бехрузу как его собственная. Теперь она хранится по
+   бригадам: r.fixB = { <бригада>: { t, ts, ph } }. */
+function migrateFix() {
+  var moved = 0;
+  Object.keys(DATA || {}).forEach(function (bid) {
+    var d = DATA[bid] || {};
+    Object.keys(d).forEach(function (n) {
+      var r = d[n];
+      if (!r || r.fixB) return;
+      if (!r.fix && !(r.fixph && r.fixph.length)) return;
+      r.fixB = {};
+      r.fixB[r.fixw || '?'] = { t: r.fix || '', ts: r.fixts || r.ts || 0, ph: (r.fixph || []).slice() };
+      delete r.fix; delete r.fixw; delete r.fixts; delete r.fixph;
+      moved++;
+    });
+  });
+  return moved;
+}
+function fixGet(r, crew) {
+  var f = r && r.fixB && r.fixB[crew];
+  return { t: (f && f.t) || '', ts: (f && f.ts) || 0, ph: (f && f.ph) || [] };
+}
+function fixEdit(r, crew) {
+  r.fixB = r.fixB || {};
+  if (!r.fixB[crew]) r.fixB[crew] = { t: '', ts: 0, ph: [] };
+  var f = r.fixB[crew];
+  f.ph = f.ph || [];
+  f.ts = Date.now();
+  return f;
+}
+/* приписки других бригад — их показываем, но не даём править */
+function fixOthers(r, crew) {
+  if (!r || !r.fixB) return [];
+  return Object.keys(r.fixB).filter(function (w) {
+    var f = r.fixB[w];
+    return w !== crew && f && (f.t || (f.ph && f.ph.length));
+  }).map(function (w) {
+    var f = r.fixB[w];
+    return { w: w, name: w === '?' ? 'раньше' : crewName(w), t: f.t || '', ts: f.ts || 0, ph: f.ph || [] };
+  });
+}
+
 /* Розетки есть и в санузле — в проекте они отдельные, влагозащищённые.
    Если подсчёт уже разбит на разделы, а такой позиции нет, добавляем её сами:
    иначе объёмы по санузлу считать нечем. */
@@ -140,6 +184,7 @@ function load() {
   try { UI = JSON.parse(localStorage.getItem('shm_ui')) || {}; } catch (e) { UI = {}; }
   if (mergeNotes()) save();
   if (ensureWcSocket()) save();
+  if (migrateFix()) save();
   if (!UI.b) UI.b = CFG.buildings[0].id;
   if (UI.floor == null) UI.floor = CFG.buildings[0].from;
   UI.tab = UI.tab || 'obj';
@@ -503,17 +548,20 @@ function naryad(period, crew) {
         totals[c.id] = (totals[c.id] || 0) + (per[c.id] || 0);
       });
       grand += sum; gmoney += money2;
-      /* «Что переделать» пишется на квартиру, а не на обход: следующая бригада
-         зайдёт в ту же квартиру — и в её наряд утянется чужая старая запись.
-         Поэтому берём приписку, только если её оставила эта же бригада и в этот
-         же период. У записей до появления fixts время берём от самой квартиры. */
-      var ft = r.fixts || r.ts || 0;
-      var mine = (crew === 'all' || (r.fixw || '?') === crew) && ft >= from && ft < to;
+      /* Приписка у каждой бригады своя. В наряд идёт только её собственная и
+         только за этот период — чужая в чужой наряд не утекает. */
+      var fixT = '', fixP = [];
+      Object.keys(r.fixB || {}).forEach(function (w) {
+        if (crew !== 'all' && w !== crew) return;
+        var f = r.fixB[w], ft = f.ts || r.ts || 0;
+        if (ft < from || ft >= to) return;
+        if (f.t) fixT += (fixT ? '\n' : '') + (crew === 'all' ? crewName(w) + ': ' + f.t : f.t);
+        fixP = fixP.concat(photosInRange(f.ph, from, to));
+      });
       out.push({
         b: b, f: x.f, n: x.n, per: per, sum: sum, money: money2, last: last,
         crews: Object.keys(crews).map(crewName).join(', '), r: r,
-        fix: mine ? (r.fix || '') : '',
-        fixph: mine ? photosInRange(r.fixph, from, to) : []
+        fix: fixT, fixph: fixP
       });
     });
   });
@@ -930,17 +978,25 @@ function viewCountFlat() {
     right: '<button class="iconbtn" data-act="clearq">' + I.trash + '</button>'
   }) +
     '<div class="screen">' + body +
-    '<label class="fld">Что переделать бригаде</label>' +
-    '<textarea id="fix" rows="2" maxlength="200" placeholder="Например: две рамки битые, розетка криво">' + h(r.fix || '') + '</textarea>' +
+    '<label class="fld">Что переделать — ' + h(crewName(crew)) + '</label>' +
+    '<textarea id="fix" rows="2" maxlength="200" placeholder="Например: две рамки битые, розетка криво">' + h(fixGet(r, crew).t) + '</textarea>' +
     '<label class="fld">Фото косяка</label><div class="photos">' +
-    (r.fixph || []).map(function (id) {
+    fixGet(r, crew).ph.map(function (id) {
       return '<span class="photo-wrap"><img class="photo" data-ph="' + id + '" alt="Фото косяка">' +
         '<button class="photo-del" data-delfix="' + id + '" aria-label="Удалить фото">' + I.x + '</button></span>';
     }).join('') +
     '<button class="photo-add" data-act="addfixph" aria-label="Добавить фото">' + I.cam + '</button></div>' +
+    /* чужие приписки: видно, что тут писала другая бригада, но правится только своя */
+    fixOthers(r, crew).map(function (f) {
+      return '<div class="alienfix"><b>' + h(f.name) + '</b>' +
+        (f.t ? '<span>' + h(f.t) + '</span>' : '') +
+        (f.ph.length ? '<div class="photos">' + f.ph.map(function (id) {
+          return '<span class="photo-wrap"><img class="photo" data-ph="' + id + '" alt="Фото косяка"></span>';
+        }).join('') + '</div>' : '') + '</div>';
+    }).join('') +
     '<div class="hint">Крупная цифра — сколько всего в квартире, серым подписано, что насчитала другая бригада. ' +
-    'Плюс и минус записываются на выбранную сейчас бригаду. «Что переделать» и фото уходят в наряд этой бригады ' +
-    'отдельно от замечаний приёмки.</div>' +
+    'Плюс и минус записываются на выбранную сейчас бригаду. «Что переделать» и фото — тоже: у каждой бригады ' +
+    'своя приписка, в наряд уходит только её собственная, отдельно от замечаний приёмки.</div>' +
     '</div>' + navbar(prev, next, 'cflat');
 }
 
@@ -1585,14 +1641,15 @@ function bind() {
   app.querySelectorAll('[data-delfix]').forEach(function (el) {
     el.onclick = function () {
       var id = el.dataset.delfix, r = rec(UI.b, VIEW.flat, true);
-      r.fixph = (r.fixph || []).filter(function (x) { return x !== id; });
+      var f = fixEdit(r, UI.crew);
+      f.ph = f.ph.filter(function (x) { return x !== id; });
       dropPhoto(id); save(); render();
     };
   });
   var fix = document.getElementById('fix');
   if (fix) fix.oninput = function () {
     var r = rec(UI.b, VIEW.flat, true);
-    r.fix = fix.value; r.fixw = UI.crew; r.fixts = Date.now(); r.qts = Date.now(); save();
+    fixEdit(r, UI.crew).t = fix.value; r.qts = Date.now(); save();
   };
 
   var left = document.getElementById('left');
@@ -1721,9 +1778,8 @@ function pickPhoto(field) {
         cachePhoto(id, url);
         idb.put(id, url);
         var r = rec(UI.b, VIEW.flat, true), key = field || 'ph';
-        r[key] = r[key] || []; r[key].push(id);
-        if (key === 'fixph') { r.fixw = UI.crew; r.fixts = Date.now(); r.qts = Date.now(); }
-        else touchIssue(r);
+        if (key === 'fixph') { fixEdit(r, UI.crew).ph.push(id); r.qts = Date.now(); }
+        else { r[key] = r[key] || []; r[key].push(id); touchIssue(r); }
         save(); render();
       };
       img.src = fr.result;
@@ -2527,6 +2583,18 @@ function applyMerge() {
   P.newBuildings.forEach(function (nb) {
     if (!CFG.buildings.some(function (b) { return b.id === nb.id; })) CFG.buildings.push(nb);
   });
+  /* Квартира берётся целиком с одной стороны, но приписки бригад складываем:
+     они про разные бригады, и терять чужую из-за выбора «моя» неправильно. */
+  function withFix(mine, theirs) {
+    var all = {};
+    [mine, theirs].forEach(function (r) {
+      Object.keys((r && r.fixB) || {}).forEach(function (w) {
+        var f = r.fixB[w], cur = all[w];
+        if (!cur || (f.ts || 0) > (cur.ts || 0)) all[w] = f;
+      });
+    });
+    return Object.keys(all).length ? all : null;
+  }
   var took = 0;
   P.auto.forEach(function (it) {
     DATA[it.bid] = DATA[it.bid] || {};
@@ -2534,7 +2602,10 @@ function applyMerge() {
   });
   var kept = 0;
   P.conflicts.forEach(function (c) {
+    var fb = withFix(c.mine, c.theirs);
     if (c.pick === 'theirs') { DATA[c.bid][c.n] = c.theirs; took++; } else kept++;
+    var r = DATA[c.bid][c.n];
+    if (fb && r) r.fixB = fb;
   });
   PENDING = null;
   ensureCfg();
@@ -2606,7 +2677,9 @@ function bossExport() {
       if (miss.length) rec2.miss = miss.join(', ');
       if (r.left) rec2.left = r.left;
       if (r.crit) rec2.crit = 1;
-      if (r.fix) rec2.fix = r.fix;
+      var fixAll = Object.keys(r.fixB || {}).filter(function (w) { return r.fixB[w].t; })
+        .map(function (w) { return (w === '?' ? 'раньше' : crewName(w)) + ': ' + r.fixB[w].t; }).join('\n');
+      if (fixAll) rec2.fix = fixAll;
       if (qTotal(r)) rec2.q = r.q;
       /* по бригадам — ради этого начальник и смотрит подсчёт */
       var bc = byCrew(r), w = {};
