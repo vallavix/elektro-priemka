@@ -544,7 +544,7 @@ function issueDays() {
   return Object.keys(set).sort().reverse();
 }
 function issueSuffix() {
-  var bs = issueBuildings();
+  var bs = expBuildings();
   return bs.length === CFG.buildings.length ? '' : '_' + bs[0].name.replace(/\s+/g, '');
 }
 /* В номере снимка зашито время съёмки: ph<13 цифр><случайные буквы>.
@@ -560,14 +560,9 @@ function photosInRange(list, from, to) {
     return t && t >= from && t < to;
   });
 }
-function issueBuildings() {
-  if (!UI.ib || UI.ib === 'all') return CFG.buildings;
-  var one = CFG.buildings.filter(function (b) { return b.id === UI.ib; });
-  return one.length ? one : CFG.buildings;
-}
 function issuesInPeriod(period, day) {
   var R = periodRange(period, day), out = [];
-  issueBuildings().forEach(function (b) {
+  expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     allFlats(b).forEach(function (x) {
       var r = d[x.n], s = status(r);
@@ -977,116 +972,141 @@ function tabBtn(id, label, n, cur) {
 function viewExport() {
   var b = bld(), mode = VIEW.pv || 'sh';
   var cur = UI.expB || 'all';
-  var picker = '<div class="sec">Что выгружать</div><div class="tabs">' +
+  var bs = expBuildings();
+  var whole = bs.length === CFG.buildings.length;
+  var where = whole ? 'весь объект' : bs[0].name;
+
+  /* Один выбор корпуса на весь экран. Раньше их было три в разных местах —
+     и было не видно, к какой кнопке относится какой. */
+  var scope = '<div class="scope"><div class="scope-lbl">Выгружаем: ' + h(where) + '</div>' +
+    '<div class="tabs">' +
     '<button class="tab ' + (cur === 'all' ? 'on' : '') + '" data-expb="all">Весь объект</button>' +
     CFG.buildings.map(function (x) {
       return '<button class="tab ' + (cur === x.id ? 'on' : '') + '" data-expb="' + x.id + '">' + h(x.name) + '</button>';
+    }).join('') + '</div></div>';
+
+  function grp(title, sub, body) {
+    return '<div class="xp"><h2 class="xp-h">' + title + '</h2>' +
+      (sub ? '<div class="xp-sub">' + sub + '</div>' : '') + body + '</div>';
+  }
+  function pills(attr, list, cur2) {
+    return '<div class="tabs">' + list.map(function (o) {
+      return '<button class="tab ' + (cur2 === o.v ? 'on' : '') + '" data-' + attr + '="' + o.v + '">' + h(o.n) + '</button>';
     }).join('') + '</div>';
+  }
+  var perList = Object.keys(PERIODS).map(function (k) { return { v: k, n: PERIODS[k].n }; });
 
   return topbar({ left: '<span style="width:44px"></span>', title: 'Выгрузка', right: '<span style="width:44px"></span>' }) +
-    '<div class="screen">' + picker +
-    '<button class="btn btn-primary btn-lg" data-act="xlsx">' + I.file + ' Скачать шахматку (.xlsx)</button>' +
-    '<div class="hint">Файл по форме начальника: лист на каждый корпус + лист «Замечания». Открывается в Excel и Numbers.</div>' +
-    '<button class="btn btn-ghost" data-act="photozip">' + I.cam + ' Скачать фото (.zip)</button>' +
-    '<div class="hint">Имена файлов — Корпус_Этаж_Кв.jpg, совпадают с колонкой «Фото» в листе замечаний.</div>' +
+    '<div class="screen">' + scope +
+
+    grp('Шахматка и фото', 'Весь ' + (whole ? 'объект' : 'корпус') + ' целиком, без деления на дни и бригады.',
+      '<button class="btn btn-primary btn-lg" data-act="xlsx">' + I.file + ' Скачать шахматку (.xlsx)</button>' +
+      '<div class="hint">Файл по форме начальника: лист на каждый корпус + лист «Замечания». Открывается в Excel и Numbers.</div>' +
+      '<button class="btn btn-ghost" data-act="photozip">' + I.cam + ' Скачать фото (.zip)</button>' +
+      '<div class="hint">Имена файлов — Корпус_Этаж_Кв.jpg, совпадают с колонкой «Фото» в листе замечаний.</div>') +
+
     /* ---- замечания приёмки за период ---- */
     (function () {
       var ip = UI.iper || 'today', day = UI.iday || '';
       var res = issuesInPeriod(ip, day);
       var days = issueDays().slice(0, 14);
-      var ib = UI.ib || 'all';
-      return '<div class="sec" style="margin-top:26px">Замечания за обход</div>' +
-        '<div class="tabs">' +
-        '<button class="tab ' + (ib === 'all' ? 'on' : '') + '" data-ib="all">Весь объект</button>' +
-        CFG.buildings.map(function (x) {
-          return '<button class="tab ' + (ib === x.id ? 'on' : '') + '" data-ib="' + x.id + '">' + h(x.name) + '</button>';
+      var n = res.rows.length;
+      return grp('Замечания за обход', 'Что не принято — прорабу и на переделку.',
+        '<div class="xp-fl">Период</div>' +
+        '<div class="tabs">' + perList.map(function (o) {
+          return '<button class="tab ' + (!day && ip === o.v ? 'on' : '') + '" data-iper="' + o.v + '">' + h(o.n) + '</button>';
         }).join('') + '</div>' +
-        '<div class="tabs">' + Object.keys(PERIODS).map(function (k) {
-          return '<button class="tab ' + (!day && ip === k ? 'on' : '') + '" data-iper="' + k + '">' + PERIODS[k].n + '</button>';
-        }).join('') + '</div>' +
-        (days.length > 1 ? '<div class="tabs">' + days.map(function (dd) {
+        (days.length > 1 ? '<div class="xp-fl">Или конкретный день</div><div class="tabs">' + days.map(function (dd) {
           return '<button class="tab ' + (day === dd ? 'on' : '') + '" data-iday="' + dd + '">' + dayLabel(dd) + '</button>';
         }).join('') + '</div>' : '') +
-        '<div class="card prog" style="margin-bottom:12px"><div class="prog-top"><div>' +
-        '<div class="prog-lbl">Замечаний · ' + h(res.label) + '</div>' +
-        '<div class="prog-num">' + res.rows.length + '</div></div>' +
+        '<div class="card prog"><div class="prog-top"><div>' +
+        '<div class="prog-lbl">' + h(where) + ' · ' + h(res.label) + '</div>' +
+        '<div class="prog-num">' + n + ' <span style="font-size:17px;font-weight:600">замечаний</span></div></div>' +
         '<div class="prog-cnt">критичных: ' +
         res.rows.filter(function (x) { return x.r.crit; }).length + '</div></div></div>' +
-        '<button class="btn btn-primary" data-act="issueshtml"' + (res.rows.length ? '' : ' disabled') + '>' +
+        (n ? '' : '<div class="empty-note">За этот период тут пусто — выбери другой период или корпус выше.</div>') +
+        '<button class="btn btn-primary" data-act="issueshtml"' + (n ? '' : ' disabled') + '>' +
         I.msg + ' Замечания с фото (.html)</button>' +
         '<div class="hint">Чтобы прораб смотрел на компе. Одно замечание — один блок: сверху корпус, ' +
         'этаж и номер квартиры, под ними фото целиком. Есть поиск по номеру и кнопки «только критичные» ' +
         'и по корпусам, клик по фото — во весь экран. Интернет не нужен, снимки лежат внутри файла.</div>' +
-        '<button class="btn btn-ghost" data-act="issuespdf"' + (res.rows.length ? '' : ' disabled') + '>' +
+        '<button class="btn btn-ghost" data-act="issuespdf"' + (n ? '' : ' disabled') + '>' +
         I.file + ' Замечания с фото (.pdf)</button>' +
         '<div class="hint">То же самое, но на печать: одно фото — одна страница А4 с шапкой ' +
         '«Корпус · Этаж · Кв.». Отдать бригаде на бумаге.</div>' +
-        '<button class="btn btn-ghost" data-act="issuesx"' + (res.rows.length ? '' : ' disabled') + '>' +
+        '<button class="btn btn-ghost" data-act="issuesx"' + (n ? '' : ' disabled') + '>' +
         I.file + ' Замечания списком (.xlsx)</button>' +
         '<div class="hint">Таблица без фотографий — для стройконтроля и для тех, кому надо править. ' +
-        'В колонке «Фото, шт.» видно, по каким квартирам снимки есть в двух файлах выше.</div>';
+        'В колонке «Фото, шт.» видно, по каким квартирам снимки есть в двух файлах выше.</div>');
     })() +
 
     /* ---- наряд по обходу ---- */
     (function () {
       var per = UI.nper || 'today', nc = UI.ncrew || 'all';
       var nd = naryad(per, nc);
-      /* Наряд собирается по фильтру «Что выгружать» вверху экрана. Он далеко от
-         этого блока, поэтому пишем прямо здесь, за какой корпус сейчас наряд,
-         и если тут пусто — сколько бы вышло по всему объекту. */
-      var nbs = expBuildings();
-      var nWhere = nbs.length === CFG.buildings.length ? 'весь объект' : nbs[0].name;
-      var allB = null;
-      if (!nd.grand && nbs.length !== CFG.buildings.length) {
-        var keepB = UI.expB; UI.expB = 'all';
-        allB = naryad(per, nc); UI.expB = keepB;
+      /* Пусто — почти всегда потому, что бригада работала в другом корпусе или
+         в другой день. Считаем это сразу и пишем прямо здесь. */
+      var hintEmpty = '';
+      if (!nd.grand) {
+        var wide = null;
+        if (!whole) {
+          var keepB = UI.expB; UI.expB = 'all';
+          wide = naryad(per, nc); UI.expB = keepB;
+        }
+        if (wide && wide.grand) {
+          hintEmpty = 'В «' + h(where) + '» за этот период у бригады пусто, а по всему объекту — <b>' +
+            wide.grand + ' шт.</b> Переключи корпус наверху на «Весь объект».';
+        } else if (per !== 'all') {
+          var far = naryad('all', nc);
+          hintEmpty = far.grand
+            ? 'За «' + h(PERIODS[per].n) + '» тут пусто, а за всё время — <b>' + far.grand +
+              ' шт.</b> Возьми период «Всё время».'
+            : 'У этой бригады тут пока ничего не отмечено на вкладке «Подсчёт».';
+        } else {
+          hintEmpty = 'У этой бригады тут пока ничего не отмечено на вкладке «Подсчёт».';
+        }
       }
-      return '<div class="sec" style="margin-top:26px">Наряд по обходу</div>' +
-        '<div class="hint" style="margin-top:-6px">Считается по выбору «Что выгружать» вверху экрана — сейчас ' +
-        h(nWhere) + '.</div>' +
-        '<div class="tabs">' + Object.keys(PERIODS).map(function (k) {
-          return '<button class="tab ' + (per === k ? 'on' : '') + '" data-per="' + k + '">' + PERIODS[k].n + '</button>';
-        }).join('') + '</div>' +
-        (CFG.crews.length > 1 ? '<div class="tabs">' +
-          '<button class="tab ' + (nc === 'all' ? 'on' : '') + '" data-ncrew="all">Все бригады</button>' +
-          CFG.crews.map(function (w) {
-            return '<button class="tab ' + (nc === w.id ? 'on' : '') + '" data-ncrew="' + w.id + '">' + h(w.n) + '</button>';
-          }).join('') + '</div>' : '') +
-        '<div class="card prog" style="margin-bottom:12px"><div class="prog-top"><div>' +
-        '<div class="prog-lbl">Сделано за период</div>' +
+      return grp('Наряд по обходу', 'Что бригада сделала на подсчёте — ей же на закрытие.',
+        '<div class="xp-fl">Период</div>' + pills('per', perList, per) +
+        (CFG.crews.length > 1 ? '<div class="xp-fl">Бригада</div>' +
+          pills('ncrew', [{ v: 'all', n: 'Все бригады' }].concat(CFG.crews.map(function (w) {
+            return { v: w.id, n: w.n };
+          })), nc) : '') +
+        '<div class="card prog"><div class="prog-top"><div>' +
+        '<div class="prog-lbl">' + h(where) + ' · ' + h(nd.crew) + '</div>' +
         '<div class="prog-num">' + nd.grand + ' <span style="font-size:17px;font-weight:600">шт.</span></div></div>' +
         '<div style="text-align:right">' +
         (hasPrices() ? '<div style="font-size:18px;font-weight:700;color:var(--ok)">' + money(nd.money) + '</div>' : '') +
         '<div class="prog-cnt">квартир: ' + nd.rows.length + '</div></div></div>' +
         (nd.grand ? '<div class="qrow">' + CFG.count.map(function (c) {
           return nd.totals[c.id] ? '<span class="qchip"><b>' + nd.totals[c.id] + '</b>' + h(c.n) + '</span>' : '';
-        }).join('') + '</div>' : '') + '</div>' +
-        (allB && allB.grand ? '<div class="hint" style="color:var(--bad)">В «' + h(nWhere) +
-          '» за этот период у бригады пусто, а по всему объекту — ' + allB.grand +
-          ' шт. Переключи «Что выгружать» наверху на «Весь объект».</div>' : '') +
+        }).join('') + '</div>' : '') +
+        (hintEmpty ? '<div class="empty-note">' + hintEmpty + '</div>' : '') +
         '<button class="btn btn-primary" data-act="naryad"' + (nd.grand ? '' : ' disabled') + '>' +
-        I.file + ' Скачать наряд' + '</button>' +
+        I.file + ' Скачать наряд</button>' +
         '<div class="hint">Только то, что отмечено на вкладке «Подсчёт» за выбранный период — чтобы отдать бригаде именно её обход, а не весь дом. ' +
-        'Замечания и фото за этот же период идут вторым листом.</div>';
+        'Замечания и фото за этот же период идут вторым листом.</div>');
     })() +
 
-    '<div class="sec" style="margin-top:26px">Начальнику участка</div>' +
-    '<button class="btn btn-ghost" data-act="bossexp">' + I.share + ' Выгрузка для начальника</button>' +
-    '<div class="hint">Маленький файл только с итогами: что принято, замечания и сколько чего '
-    + 'насчитала каждая бригада. <b>Без фотографий</b> — уходит в мессенджер мгновенно, '
-    + 'в отличие от резервной копии. Начальник открывает его в приложении «Участок».</div>' +
+    grp('Начальнику участка', '',
+      '<button class="btn btn-ghost" data-act="bossexp">' + I.share + ' Выгрузка для начальника</button>' +
+      '<div class="hint">Маленький файл только с итогами: что принято, замечания и сколько чего '
+      + 'насчитала каждая бригада. <b>Без фотографий</b> — уходит в мессенджер мгновенно, '
+      + 'в отличие от резервной копии. Начальник открывает его в приложении «Участок».</div>') +
 
-    '<div class="sec" style="margin-top:26px">Напарник</div>' +
-    '<button class="btn btn-ghost" data-act="share" style="margin-bottom:10px">' + I.share + ' Передать напарнику</button>' +
-    '<button class="btn btn-ghost" data-act="merge">' + I.merge + ' Принять от напарника</button>' +
-    '<div class="hint">Файл кидаете друг другу в Telegram. При загрузке квартиры <b>сливаются</b>, а не затираются: чужие проверенные добавятся к твоим. Если одну квартиру проверили оба и по-разному — приложение спросит, чью версию оставить.</div>' +
-    '<div class="sec" style="margin-top:26px">Страховка</div>' +
-    '<button class="btn btn-ghost" data-act="backup">' + I.file + ' Резервная копия (.json)</button>' +
-    '<div class="hint">Сохрани раз в пару дней на случай потери телефона. Восстановить: Настройки → Загрузить копию (заменит всё целиком).</div>' +
-    '<div class="sec" style="margin-top:26px">Предпросмотр · ' + h(b.name) + '</div>' +
-    '<div class="tabs"><button class="tab ' + (mode === 'sh' ? 'on' : '') + '" data-pv="sh">Шахматка</button>' +
-    '<button class="tab ' + (mode === 'is' ? 'on' : '') + '" data-pv="is">Замечания</button></div>' +
-    (mode === 'sh' ? previewTable(b) : previewIssues(b)) +
+    grp('Напарник', 'Обход вдвоём: квартиры сливаются, а не затираются.',
+      '<button class="btn btn-ghost" data-act="share" style="margin-bottom:10px">' + I.share + ' Передать напарнику</button>' +
+      '<button class="btn btn-ghost" data-act="merge">' + I.merge + ' Принять от напарника</button>' +
+      '<div class="hint">Файл кидаете друг другу в Telegram. Если одну квартиру проверили оба и по-разному — приложение спросит, чью версию оставить.</div>') +
+
+    grp('Страховка', '',
+      '<button class="btn btn-ghost" data-act="backup">' + I.file + ' Резервная копия (.json)</button>' +
+      '<div class="hint">Сохрани раз в пару дней на случай потери телефона. Восстановить: Настройки → Загрузить копию (заменит всё целиком).</div>') +
+
+    grp('Предпросмотр · ' + h(b.name), 'Так это выглядит в файле.',
+      '<div class="tabs"><button class="tab ' + (mode === 'sh' ? 'on' : '') + '" data-pv="sh">Шахматка</button>' +
+      '<button class="tab ' + (mode === 'is' ? 'on' : '') + '" data-pv="is">Замечания</button></div>' +
+      (mode === 'sh' ? previewTable(b) : previewIssues(b))) +
     '</div>' + tabbar();
 }
 function previewTable(b) {
@@ -1309,9 +1329,6 @@ function bind() {
   });
   app.querySelectorAll('[data-crew]').forEach(function (el) {
     el.onclick = function () { UI.crew = el.dataset.crew; vibr(6); save(); render(); };
-  });
-  app.querySelectorAll('[data-ib]').forEach(function (el) {
-    el.onclick = function () { UI.ib = el.dataset.ib; save(); render(); };
   });
   app.querySelectorAll('[data-iper]').forEach(function (el) {
     el.onclick = function () { UI.iper = el.dataset.iper; UI.iday = ''; save(); render(); };
