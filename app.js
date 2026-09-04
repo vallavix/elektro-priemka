@@ -377,7 +377,11 @@ function issueTs(r) {
   var lastQ = 0;
   (r.lg || []).forEach(function (e) { if (e.t > lastQ) lastQ = e.t; });
   if (r.qts && r.qts > lastQ) lastQ = r.qts;
-  if (lastQ && Math.abs(lastQ - (r.ts || 0)) < 120000) return 0;
+  /* Совпадение с точностью до минуты ловило не всё: подсчёт мог двигать ts и
+     сильно позже приёмки, и такая квартира всплывала в «сегодня» как свежее
+     замечание. Считаем время приёмки известным, только если оно новее любой
+     возни с подсчётом. */
+  if (lastQ && (r.ts || 0) <= lastQ + 120000) return 0;
   return r.ts || 0;
 }
 function qTotal(r) {
@@ -602,13 +606,15 @@ function issueDays() {
 }
 /* Что писать в файле замечаний: список непринятых пунктов, ручная приписка
    «что осталось», или оба. Выбирается на вкладке «Выгрузка». */
+function photosOnly() { return (UI.itxt || 'both') === 'none'; }
 function issueText(x) {
   var m = UI.itxt || 'both';
+  if (m === 'none') return { miss: '', left: '' };
   return { miss: m === 'left' ? '' : (x.miss || ''), left: m === 'miss' ? '' : (x.r.left || '') };
 }
 function issueTextSuffix() {
   var m = UI.itxt || 'both';
-  return m === 'miss' ? '_невыполнено' : m === 'left' ? '_осталось' : '';
+  return m === 'miss' ? '_невыполнено' : m === 'left' ? '_осталось' : m === 'none' ? '_фото' : '';
 }
 function issueSuffix() {
   var bs = expBuildings();
@@ -632,14 +638,20 @@ function issuesInPeriod(period, day) {
   expBuildings().forEach(function (b) {
     var d = DATA[b.id] || {};
     allFlats(b).forEach(function (x) {
-      var r = d[x.n], s = status(r);
-      if (s !== 'bad' && s !== 'warn') return;
-      var t = issueTs(r);
-      if (t < R.from || t >= R.to) return;
+      var r = d[x.n];
+      if (!r) return;
       var miss = CFG.positions.filter(function (p) { return r.st[p.id] === 0; })
         .map(function (p) { return p.n; }).join(', ');
-      out.push({ b: b, f: x.f, n: x.n, r: r, miss: miss, ts: t,
-        ph: photosInRange(r.ph, R.from, R.to) });
+      var ph = photosInRange(r.ph, R.from, R.to);
+      /* Замечание — это не только крест в чек-листе. Квартира, где за этот день
+         сняли фото или дописали «что осталось», тоже должна попасть в файл. */
+      if (!miss && !r.left && !(r.ph || []).length) return;
+      /* В период попадаем по времени приёмки ИЛИ по времени самих снимков:
+         дофотографировал вчерашнюю квартиру — она уйдёт в сегодняшний файл. */
+      var t = issueTs(r);
+      if (!ph.length && (t < R.from || t >= R.to)) return;
+      if (photosOnly() && !ph.length) return;
+      out.push({ b: b, f: x.f, n: x.n, r: r, miss: miss, ts: t, ph: ph });
     });
   });
   out.sort(function (a, z) { return a.b.name.localeCompare(z.b.name) || a.f - z.f || a.n - z.n; });
@@ -1093,17 +1105,20 @@ function viewExport() {
         }).join('') + '</div>' +
         '<div class="xp-fl">Что писать в файле</div>' +
         pills('itxt', [{ v: 'both', n: 'И то и то' }, { v: 'miss', n: 'Не выполнено' },
-          { v: 'left', n: 'Что осталось' }], UI.itxt || 'both') +
+          { v: 'left', n: 'Что осталось' }, { v: 'none', n: 'Только фото' }], UI.itxt || 'both') +
         '<div class="hint" style="margin-top:-6px">«Не выполнено» — пункты, отмеченные крестом в чек-листе. ' +
-        '«Что осталось» — то, что дописал руками. Выбор действует на все три файла ниже.</div>' +
+        '«Что осталось» — то, что дописал руками. «Только фото» — одни снимки без текста, ' +
+        'и в файл идут лишь квартиры, где за этот период есть фото. Выбор действует на все три файла ниже.</div>' +
         (days.length > 1 ? '<div class="xp-fl">Или конкретный день</div><div class="tabs">' + days.map(function (dd) {
           return '<button class="tab ' + (day === dd ? 'on' : '') + '" data-iday="' + dd + '">' + dayLabel(dd) + '</button>';
         }).join('') + '</div>' : '') +
         '<div class="card prog"><div class="prog-top"><div>' +
         '<div class="prog-lbl">' + h(where) + ' · ' + h(res.label) + '</div>' +
         '<div class="prog-num">' + n + ' <span style="font-size:17px;font-weight:600">замечаний</span></div></div>' +
-        '<div class="prog-cnt">критичных: ' +
-        res.rows.filter(function (x) { return x.r.crit; }).length + '</div></div></div>' +
+        '<div style="text-align:right"><div class="prog-cnt">критичных: ' +
+        res.rows.filter(function (x) { return x.r.crit; }).length + '</div>' +
+        '<div class="prog-cnt">с фото: ' + res.rows.filter(function (x) { return x.ph.length; }).length +
+        '</div></div></div></div>' +
         (n ? '' : '<div class="empty-note">За этот период тут пусто — выбери другой период или корпус выше.</div>') +
         '<button class="btn btn-primary" data-act="issueshtml"' + (n ? '' : ' disabled') + '>' +
         I.msg + ' Замечания с фото (.html)</button>' +
@@ -2158,7 +2173,7 @@ function buildIssuesPeriod(res) {
   var C = window.colName;
   /* Ненужную колонку не оставляем пустой, а выкидываем: лист узкий, его печатают. */
   var mode = UI.itxt || 'both';
-  var withMiss = mode !== 'left', withLeft = mode !== 'miss';
+  var withMiss = mode !== 'left' && mode !== 'none', withLeft = mode !== 'miss' && mode !== 'none';
   var rows = [], merges = [], lastCol = 5 + (withMiss ? 1 : 0) + (withLeft ? 1 : 0);
 
   rows.push([{ v: 'ЗАМЕЧАНИЯ — ' + res.label.toUpperCase(), s: 6 }]);
