@@ -164,6 +164,53 @@ function fixOthers(r, crew) {
   });
 }
 
+/* Люстры начали вешать только сейчас, а светильники в натяжном потолке есть в
+   каждой сданной квартире. В чек-листе при этом стояла одна «Люстра», а в
+   подсчёте — одни «Светильники». Добавляем недостающее с двух сторон.
+   Уже принятым квартирам светильники проставляем по люстре: если свет в
+   комнате смотрели, значит смотрели и их. */
+function ensureLamps() {
+  if (CFG.lampsFixed) return false;
+  CFG.lampsFixed = 1;
+  var changed = false;
+
+  /* приёмка: «Светильники» в тот же раздел, где стоит «Люстра» */
+  var lampI = -1;
+  CFG.positions.forEach(function (p, i) { if (/люстр/i.test(p.n) && lampI < 0) lampI = i; });
+  if (lampI >= 0) {
+    var lamp = CFG.positions[lampI], g = lamp.g || '';
+    var has = CFG.positions.some(function (p) {
+      return (p.g || '') === g && /светильник/i.test(p.n);
+    });
+    if (!has) {
+      var np = { id: 'p' + Date.now(), n: 'Светильники' };
+      if (g) np.g = g;
+      CFG.positions.splice(lampI + 1, 0, np);
+      Object.keys(DATA || {}).forEach(function (bid) {
+        var d = DATA[bid] || {};
+        Object.keys(d).forEach(function (n) {
+          var r = d[n];
+          if (!r || !r.st) return;
+          var v = r.st[lamp.id];
+          if (v != null) r.st[np.id] = v;
+        });
+      });
+      changed = true;
+    }
+  }
+
+  /* подсчёт: «Люстра» рядом со «Светильниками» в разделе квартиры */
+  var li = -1;
+  CFG.count.forEach(function (c, i) {
+    if (li < 0 && /светильник/i.test(c.n) && !/санузел|с\/у|ванн/i.test(String(c.g || ''))) li = i;
+  });
+  if (li >= 0 && !CFG.count.some(function (c) { return /люстр/i.test(c.n); })) {
+    CFG.count.splice(li, 0, { id: 'c' + Date.now(), n: 'Люстра', price: 0, g: CFG.count[li].g || '' });
+    changed = true;
+  }
+  return changed;
+}
+
 /* Розетки есть и в санузле — в проекте они отдельные, влагозащищённые.
    Если подсчёт уже разбит на разделы, а такой позиции нет, добавляем её сами:
    иначе объёмы по санузлу считать нечем. */
@@ -185,6 +232,7 @@ function load() {
   if (mergeNotes()) save();
   if (ensureWcSocket()) save();
   if (migrateFix()) save();
+  ensureLamps(); save();
   if (!UI.b) UI.b = CFG.buildings[0].id;
   if (UI.floor == null) UI.floor = CFG.buildings[0].from;
   UI.tab = UI.tab || 'obj';
